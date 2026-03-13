@@ -1,0 +1,10 @@
+{
+  "session_id": "test1234-abcd-efgh-ijkl",
+  "cwd": "/tmp/test-project",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Write",
+  "tool_input": {
+    "file_path": "/tmp/test-project/src/api/handler.ts",
+    "content": "import { db } from 'src/data/db';\nconsole.log(process.env.API_KEY);\n"
+  }
+}
