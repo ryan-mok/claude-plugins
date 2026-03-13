@@ -1,0 +1,10 @@
+{
+  "name": "harness",
+  "version": "1.0.0",
+  "description": "Harness engineering for Claude Code — loop detection, cross-session progress, architectural constraints, and orchestrated development workflows.",
+  "author": {
+    "name": "Ryan Mok"
+  },
+  "license": "MIT",
+  "keywords": ["harness", "guardrails", "loop-detection", "progress", "constraints"]
+}
