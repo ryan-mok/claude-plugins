@@ -1,0 +1,18 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "ryan-mok-plugins",
+  "owner": {
+    "name": "ryan-mok"
+  },
+  "metadata": {
+    "description": "Claude Code plugins by Ryan Mok",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "harness",
+      "source": "./harness",
+      "description": "Harness engineering for Claude Code — loop detection, cross-session progress, architectural constraints, and orchestrated development workflows."
+    }
+  ]
+}
