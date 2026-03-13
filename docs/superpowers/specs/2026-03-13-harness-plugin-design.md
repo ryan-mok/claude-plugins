@@ -56,6 +56,29 @@ All hooks receive JSON via stdin from Claude Code. Key fields:
 }
 ```
 
+**SessionStart hook output** (for progress loading — must use `hookSpecificOutput.additionalContext`, not `systemMessage`, per the working superpowers implementation):
+
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "SessionStart",
+    "additionalContext": "Content injected into session context"
+  }
+}
+```
+
+**Stop hook output** (for progress saving — must include `decision` field):
+
+```json
+{
+  "decision": "approve",
+  "reason": "Progress saved",
+  "systemMessage": "Harness progress saved to .claude/harness/progress/..."
+}
+```
+
+Stop hooks gate whether the agent can stop. Our progress-save hook always returns `"decision": "approve"`.
+
 **PreToolUse hook output** (for constraint enforcement):
 
 ```json
@@ -68,7 +91,13 @@ All hooks receive JSON via stdin from Claude Code. Key fields:
 }
 ```
 
-**Prompt hooks** differ from command hooks: instead of running a shell script, they send a prompt to the LLM for evaluation. Configured in hooks.json with `"type": "prompt"` and a `"prompt"` field instead of `"type": "command"`. The LLM returns a structured decision. Prompt hooks have a default 30s timeout vs 60s for command hooks.
+**Prompt hooks** (not used in v1 but documented for v2 constraint work): instead of running a shell script, they send a prompt to the LLM for evaluation. Configured in hooks.json with `"type": "prompt"` and a `"prompt"` field instead of `"type": "command"`. The LLM returns a structured decision. Prompt hooks have a default 30s timeout vs 60s for command hooks.
+
+**Hook script conventions** (following superpowers' working implementation):
+- All scripts start with `set -euo pipefail`
+- Use a JSON escape function for embedding multi-line content in JSON output
+- Check for `CLAUDE_PLUGIN_ROOT` env var for portability
+- Exit 0 on success, exit 2 only for blocking errors
 
 ## Components
 
@@ -143,7 +172,7 @@ On session start (including after compaction and resume):
 - Reads `session_id` from stdin JSON
 - If a progress file exists for this session ID prefix, outputs its contents as `systemMessage`
 - Otherwise, if `_index.md` exists, outputs it so the agent can see what other sessions have been working on
-- Returns exit code 0 with JSON: `{"systemMessage": "<file contents>"}`
+- Returns exit code 0 with JSON using `hookSpecificOutput.additionalContext` (not `systemMessage` — this is the correct SessionStart output format per the superpowers implementation)
 
 **Progress file format:**
 
@@ -237,6 +266,10 @@ Semantic constraints ("this file shouldn't contain business logic") are deferred
 }
 ```
 
+**Constraint type evaluation:**
+- `import-boundary`: The `from` field is a glob matched against the target file path. The `import` field is a glob matched against paths found in import/require statements extracted from the file content (e.g., `import foo from 'src/data/db'` → check if `src/data/db` matches the `import` glob).
+- `file-pattern` / `custom`: The `in` field is a glob matched against the target file path. The `pattern` field is a regex (`grep -E`) matched against the file content being written.
+
 **Severity levels:**
 - `block` — hook returns `deny`, preventing the write
 - `warn` — hook returns `allow` but injects a systemMessage explaining the violation
@@ -257,12 +290,22 @@ Teaches how to define constraints for a project:
 
 **Primitive:** `/harness` command + orchestration skill.
 
-**Command: `/harness`**
+**Command: `/harness`** (`commands/harness.md`)
+
+Frontmatter:
+```yaml
+---
+description: Start a harness-guided development cycle
+argument-hint: [task description or JIRA-ID]
+---
+```
 
 Accepts flexible input:
 - `/harness Fix the login timeout bug` — free text description
 - `/harness PROJ-1234` — Jira ticket ID (pulls context via atlassian plugin if installed)
 - `/harness` with no args — asks what you're working on
+
+The command body is instructions FOR Claude (not messages to the user). It tells Claude to: detect Jira IDs via `[A-Z][A-Z0-9]+-\d+` pattern, initialize progress, check constraints, and invoke brainstorming.
 
 On kickoff:
 1. Gather context — if Jira ticket, pull description/comments/acceptance criteria
@@ -313,7 +356,16 @@ superpowers:finishing-a-development-branch
 
 **Problem:** The harness does things in the background. The user needs visibility.
 
-**Primitive:** `/harness-status` command.
+**Primitive:** `/harness-status` command (`commands/harness-status.md`).
+
+Frontmatter:
+```yaml
+---
+description: Show harness status (loop detection, progress, constraints)
+argument-hint: [--progress | --constraints | --reset-loops]
+allowed-tools: Read, Bash(cat:*,ls:*,wc:*,jq:*,head:*,find:*)
+---
+```
 
 Assembles a diagnostic view from the harness state files:
 
@@ -417,7 +469,7 @@ harness/
     ],
     "SessionStart": [
       {
-        "matcher": "startup|resume|compact",
+        "matcher": "startup|resume|clear|compact",
         "hooks": [
           {
             "type": "command",
