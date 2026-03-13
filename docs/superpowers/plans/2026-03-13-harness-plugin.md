@@ -351,10 +351,22 @@ done
 assert_loop_detected "3 identical errors" "$output"
 
 echo ""
-echo "Test 5: State file keeps only last 20 entries"
+echo "Test 5: Edit-test-fail cycle — 3 iterations triggers loop"
+rm -f "${STATE_PREFIX}.jsonl"
+for i in 1 2 3; do
+    # Edit call
+    cat "$FIXTURES/post-tool-use-edit.json" | bash "$HOOK_SCRIPT" > /dev/null 2>&1 || true
+    # Failing test call
+    output=$(cat "$FIXTURES/post-tool-use-bash-fail.json" | bash "$HOOK_SCRIPT" 2>&1 || true)
+done
+assert_loop_detected "edit-test-fail cycle" "$output"
+
+echo ""
+echo "Test 6: State file keeps only last 20 entries"
 rm -f "${STATE_PREFIX}.jsonl"
 for i in $(seq 1 25); do
-    cat "$FIXTURES/post-tool-use-edit.json" | bash "$HOOK_SCRIPT" > /dev/null 2>&1 || true
+    # Use a unique file path each time to avoid triggering Pattern 1
+    jq --arg fp "/tmp/test-project/src/file${i}.ts" '.tool_input.file_path = $fp' "$FIXTURES/post-tool-use-edit.json" | bash "$HOOK_SCRIPT" > /dev/null 2>&1 || true
 done
 line_count=$(wc -l < "${STATE_PREFIX}.jsonl" | tr -d ' ')
 if [ "$line_count" -le 20 ]; then
@@ -457,7 +469,10 @@ if [ -n "$FILE_PATH" ] && [ "$FILE_PATH" != "" ]; then
         'select(.tool == $tool and .file == $file) | .tool' | wc -l | tr -d ' ')
     if [ "$SAME_TARGET" -ge 4 ]; then
         MSG="LOOP DETECTED: You have used $TOOL_NAME on $FILE_PATH $SAME_TARGET times in the last 10 tool calls. STOP. Do not retry the same approach. Use the harness:loop-recovery skill to find a fundamentally different approach."
-        echo "{\"systemMessage\": \"$(escape_for_json "$MSG")\"}"
+        ESCAPED_MSG=$(escape_for_json "$MSG")
+        cat <<EOF
+{"systemMessage": "${ESCAPED_MSG}"}
+EOF
         exit 0
     fi
 fi
@@ -469,27 +484,35 @@ if [ -n "$ERROR_FP" ]; then
     if [ "$SAME_ERROR" -ge 3 ]; then
         SHORT_ERR=$(echo "$ERROR_FP" | head -c 60)
         MSG="LOOP DETECTED: The same error has appeared $SAME_ERROR times: \"$SHORT_ERR...\". STOP. Do not retry the same approach. Use the harness:loop-recovery skill to find a fundamentally different approach."
-        echo "{\"systemMessage\": \"$(escape_for_json "$MSG")\"}"
+        ESCAPED_MSG=$(escape_for_json "$MSG")
+        cat <<EOF
+{"systemMessage": "${ESCAPED_MSG}"}
+EOF
         exit 0
     fi
 fi
 
-# === Detection Pattern 3: Edit-test-fail cycle, 3+ times ===
+# === Detection Pattern 3: Edit-test-fail cycle on same file, 3+ times ===
 if [ "$TOOL_NAME" = "Bash" ] && [ -n "$ERROR_FP" ]; then
     COMMAND=$(get_field "$INPUT" ".tool_input.command // \"\"")
     if echo "$COMMAND" | grep -qiE "(test|jest|pytest|cargo test|go test|npm test|vitest|mocha|rspec)"; then
-        # Count how many times we see Edit/Write followed by a failing Bash test in last 10
+        # Count Edit/Write->failing Bash pairs on the same file in last 10 entries
         CYCLE_COUNT=$(tail -n 10 "$STATE_FILE" | jq -s '
-            [range(1; length) |
-                select(
-                    (.[.-1].tool == "Edit" or .[.-1].tool == "Write") and
-                    (.[(.)].tool == "Bash" and (.[(.)].error | length > 0))
-                )
-            ] | length
+            reduce range(1; length) as $i (0;
+                if ((.[$i].tool == "Bash") and ((.[$i].error | length) > 0) and
+                    ((.[($i - 1)].tool == "Edit") or (.[($i - 1)].tool == "Write")) and
+                    ((.[($i - 1)].file | length) > 0))
+                then . + 1
+                else .
+                end
+            )
         ' 2>/dev/null || echo "0")
         if [ "$CYCLE_COUNT" -ge 3 ]; then
             MSG="LOOP DETECTED: Edit-test-fail cycle detected $CYCLE_COUNT times. STOP. The same fix approach is not working. Use the harness:loop-recovery skill to try a fundamentally different approach."
-            echo "{\"systemMessage\": \"$(escape_for_json "$MSG")\"}"
+            ESCAPED_MSG=$(escape_for_json "$MSG")
+            cat <<EOF
+{"systemMessage": "${ESCAPED_MSG}"}
+EOF
             exit 0
         fi
     fi
@@ -882,11 +905,10 @@ cd ~/repos/claude-plugins && git add harness/hooks/scripts/progress-save.sh && g
 
 ---
 
-### Task 9: Write progress-load tests and implementation
+### Task 9: Write progress-load tests
 
 **Files:**
 - Create: `harness/tests/test-progress-load.sh`
-- Create: `harness/hooks/scripts/progress-load.sh`
 
 - [ ] **Step 1: Write test script**
 
@@ -904,6 +926,9 @@ PASS=0
 FAIL=0
 TEST_DIR=$(mktemp -d)
 PROGRESS_DIR="$TEST_DIR/.claude/harness/progress"
+
+# Set CLAUDE_PLUGIN_ROOT so progress-load.sh uses hookSpecificOutput format
+export CLAUDE_PLUGIN_ROOT="$SCRIPT_DIR/.."
 
 echo "=== Progress Load Tests ==="
 
@@ -952,7 +977,29 @@ echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ] || exit 1
 ```
 
-- [ ] **Step 2: Write progress-load.sh**
+- [ ] **Step 2: Make executable and run — verify fails**
+
+```bash
+chmod +x harness/tests/test-progress-load.sh
+cd ~/repos/claude-plugins && bash harness/tests/test-progress-load.sh
+```
+
+Expected: FAIL (progress-load.sh doesn't exist yet)
+
+- [ ] **Step 3: Commit**
+
+```bash
+cd ~/repos/claude-plugins && git add harness/tests/test-progress-load.sh && git commit -m "test: add progress-load tests (red)"
+```
+
+---
+
+### Task 9b: Implement progress-load hook
+
+**Files:**
+- Create: `harness/hooks/scripts/progress-load.sh`
+
+- [ ] **Step 1: Write progress-load.sh**
 
 Create `harness/hooks/scripts/progress-load.sh`:
 
@@ -1017,19 +1064,19 @@ fi
 exit 0
 ```
 
-- [ ] **Step 3: Make executable, run tests**
+- [ ] **Step 2: Make executable, run tests**
 
 ```bash
-chmod +x harness/hooks/scripts/progress-load.sh harness/tests/test-progress-load.sh
+chmod +x harness/hooks/scripts/progress-load.sh
 cd ~/repos/claude-plugins && bash harness/tests/test-progress-load.sh
 ```
 
 Expected: All PASS
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-cd ~/repos/claude-plugins && git add harness/hooks/scripts/progress-load.sh harness/tests/test-progress-load.sh && git commit -m "feat: implement progress-load hook with session matching and index fallback"
+cd ~/repos/claude-plugins && git add harness/hooks/scripts/progress-load.sh && git commit -m "feat: implement progress-load hook with session matching and index fallback"
 ```
 
 ---
@@ -1251,7 +1298,31 @@ else
 fi
 
 echo ""
-echo "Test 5: Rule pattern does not match content — allow"
+echo "Test 5: import-boundary rule — blocks forbidden import"
+cat > "$TEST_DIR/.claude/harness/constraints.json" << 'RULES'
+{
+  "rules": [
+    {
+      "name": "no-cross-module-imports",
+      "type": "import-boundary",
+      "description": "API layer must not import from data layer",
+      "deny": { "from": "src/api/**", "import": "src/data/**" },
+      "severity": "block"
+    }
+  ]
+}
+RULES
+output=$(jq --arg cwd "$TEST_DIR" '.cwd = $cwd' "$FIXTURES/pre-tool-use-write.json" | bash "$HOOK_SCRIPT" 2>&1)
+if echo "$output" | jq -e '.hookSpecificOutput.permissionDecision == "deny"' > /dev/null 2>&1; then
+    echo "  PASS: import-boundary blocks cross-layer import"
+    ((PASS++))
+else
+    echo "  FAIL: expected deny for cross-layer import (got: $output)"
+    ((FAIL++))
+fi
+
+echo ""
+echo "Test 6: Rule pattern does not match content — allow"
 cat > "$TEST_DIR/.claude/harness/constraints.json" << 'RULES'
 {
   "rules": [
