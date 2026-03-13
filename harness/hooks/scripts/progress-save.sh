@@ -30,10 +30,13 @@ BRANCH_SAFE=$(echo "$BRANCH" | tr '/' '-')
 
 PROGRESS_FILE="$PROGRESS_DIR/${BRANCH_SAFE}--${SESSION_PREFIX}.md"
 
-# Check if the agent wrote a progress file for this session
+# Check if the agent wrote a progress file for this session.
+# Fallback files (created by this script) contain a marker — exclude those.
 AGENT_WROTE_PROGRESS=false
 if [ -f "$PROGRESS_FILE" ]; then
-    AGENT_WROTE_PROGRESS=true
+    if ! grep -q '<!-- harness-fallback -->' "$PROGRESS_FILE" 2>/dev/null; then
+        AGENT_WROTE_PROGRESS=true
+    fi
 fi
 
 # Check if the task is already marked complete
@@ -64,6 +67,7 @@ if [ "$AGENT_WROTE_PROGRESS" = false ]; then
         CHANGED_FILES=$(cd "$CWD" && git diff --name-only HEAD 2>/dev/null || echo "(no changes)")
 
         cat > "$PROGRESS_FILE" << PROGRESS
+<!-- harness-fallback -->
 # Harness Progress
 **Updated:** $TIMESTAMP
 **Branch:** $BRANCH
