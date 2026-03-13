@@ -12,10 +12,10 @@ assert_exit_code() {
     local name="$1" expected="$2" actual="$3"
     if [ "$expected" = "$actual" ]; then
         echo "  PASS: $name (exit $actual)"
-        ((PASS++))
+        ((PASS++)) || true
     else
         echo "  FAIL: $name (expected exit $expected, got $actual)"
-        ((FAIL++))
+        ((FAIL++)) || true
     fi
 }
 
@@ -23,10 +23,10 @@ assert_no_loop() {
     local name="$1" output="$2"
     if echo "$output" | grep -q "LOOP DETECTED"; then
         echo "  FAIL: $name (unexpected loop detected)"
-        ((FAIL++))
+        ((FAIL++)) || true
     else
         echo "  PASS: $name (no loop)"
-        ((PASS++))
+        ((PASS++)) || true
     fi
 }
 
@@ -34,10 +34,10 @@ assert_loop_detected() {
     local name="$1" output="$2"
     if echo "$output" | grep -q "LOOP DETECTED"; then
         echo "  PASS: $name (loop detected)"
-        ((PASS++))
+        ((PASS++)) || true
     else
         echo "  FAIL: $name (expected loop detection)"
-        ((FAIL++))
+        ((FAIL++)) || true
     fi
 }
 
@@ -98,10 +98,10 @@ done
 line_count=$(wc -l < "${STATE_PREFIX}.jsonl" | tr -d ' ')
 if [ "$line_count" -le 20 ]; then
     echo "  PASS: rolling window ($line_count lines <= 20)"
-    ((PASS++))
+    ((PASS++)) || true
 else
     echo "  FAIL: rolling window ($line_count lines > 20)"
-    ((FAIL++))
+    ((FAIL++)) || true
 fi
 
 # Cleanup
