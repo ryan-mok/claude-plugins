@@ -285,7 +285,7 @@ superpowers:executing-plans
     ▼
 superpowers:verification-before-completion
     ▼
-/simplify on changed files
+simplify skill on changed files (if code-simplifier installed)
     ▼
 superpowers:requesting-code-review
     ▼
@@ -439,7 +439,9 @@ harness/
 }
 ```
 
-Note: The PreToolUse has two hooks for Write|Edit — the command hook (`constraint-check.sh`) does fast-path glob matching and exits immediately if no rules apply to the target file. The prompt hook handles semantic evaluation when rules do match. Both run in parallel; the command hook's fast exit means no overhead when constraints don't apply.
+Note: The PreToolUse has two entries for Write|Edit. Per Claude Code's hook execution model, all matching hooks run in **parallel** — the command hook and prompt hook fire simultaneously. The command hook (`constraint-check.sh`) does fast-path glob matching: if no constraint rules apply to the target file, it exits silently (exit 0). If rules do match, it exits with a systemMessage noting which rules apply. The prompt hook always fires but is the authoritative decision-maker (deny/allow). The command hook's value is providing immediate feedback and rule context to the transcript, not short-circuiting the prompt hook. For projects with no `.claude/harness/constraints.json`, the prompt hook returns "allow" immediately (no rules to evaluate), so the cost is minimal.
+
+**Runtime dependency:** `jq` is required for hook scripts (loop detection, progress save/load, constraint check). The `/harness-status` command should warn if `jq` is not found on the system PATH.
 
 ## Dependencies
 
