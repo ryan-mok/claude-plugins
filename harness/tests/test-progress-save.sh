@@ -8,6 +8,8 @@ FIXTURES="$SCRIPT_DIR/fixtures"
 PASS=0
 FAIL=0
 TEST_DIR=$(mktemp -d)
+# Resolve symlinks for consistency with hook scripts (macOS /var -> /private/var)
+TEST_DIR=$(cd "$TEST_DIR" && pwd -P)
 PROGRESS_DIR="$TEST_DIR/.claude/harness/progress"
 
 assert_contains() {

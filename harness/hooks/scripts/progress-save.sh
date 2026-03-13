@@ -8,10 +8,15 @@ INPUT=$(cat)
 
 SESSION_PREFIX=$(get_session_prefix "$INPUT")
 CWD=$(get_field "$INPUT" ".cwd")
+# Resolve symlinks for consistency (macOS /var -> /private/var)
+CWD=$(cd "$CWD" && pwd -P)
 EVENT=$(get_field "$INPUT" ".hook_event_name")
 
-# Determine progress directory
-PROGRESS_DIR="$CWD/.claude/harness/progress"
+# Resolve to main git root (works across worktrees)
+GIT_ROOT=$(get_git_root "$CWD")
+
+# Determine progress directory (always at main repo root)
+PROGRESS_DIR="$GIT_ROOT/.claude/harness/progress"
 
 # If the progress directory doesn't exist, harness was never used in this project — exit silently
 if [ ! -d "$PROGRESS_DIR" ]; then
