@@ -36,24 +36,41 @@ assert_file_exists() {
 cd "$TEST_DIR"
 git init -q
 git commit --allow-empty -m "initial" -q
+TEST_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 
 echo "=== Progress Save Tests ==="
 
 echo ""
-echo "Test 1: Stop event — creates progress dir and fallback file"
-jq --arg cwd "$TEST_DIR" '.cwd = $cwd' "$FIXTURES/stop.json" | bash "$HOOK_SCRIPT" > /dev/null 2>&1 || true
-assert_file_exists "progress dir created" "$PROGRESS_DIR/_index.md"
-
-echo ""
-echo "Test 2: Stop event — output contains decision:approve"
+echo "Test 1: Stop event — no progress dir means silent approve (harness never used)"
 output=$(jq --arg cwd "$TEST_DIR" '.cwd = $cwd' "$FIXTURES/stop.json" | bash "$HOOK_SCRIPT" 2>&1 || true)
 if echo "$output" | jq -e '.decision == "approve"' > /dev/null 2>&1; then
-    echo "  PASS: Stop returns decision:approve"
+    echo "  PASS: Stop returns silent approve when no progress dir"
     ((PASS++)) || true
 else
-    echo "  FAIL: Stop missing decision:approve (got: $output)"
+    echo "  FAIL: expected silent approve (got: $output)"
     ((FAIL++)) || true
 fi
+# Now create progress dir for subsequent tests
+mkdir -p "$PROGRESS_DIR"
+
+echo ""
+echo "Test 2: Stop event with agent-written progress — outputs systemMessage"
+cat > "$PROGRESS_DIR/${TEST_BRANCH}--test1234.md" << 'EOF'
+# Harness Progress
+**Updated:** 2026-01-01T00:00:00Z
+
+## Current Status
+In progress
+EOF
+output=$(jq --arg cwd "$TEST_DIR" '.cwd = $cwd' "$FIXTURES/stop.json" | bash "$HOOK_SCRIPT" 2>&1 || true)
+if echo "$output" | jq -e '.systemMessage' > /dev/null 2>&1; then
+    echo "  PASS: Stop with active progress returns systemMessage"
+    ((PASS++)) || true
+else
+    echo "  FAIL: expected systemMessage (got: $output)"
+    ((FAIL++)) || true
+fi
+rm -f "$PROGRESS_DIR/${TEST_BRANCH}--test1234.md"
 
 echo ""
 echo "Test 3: PreCompact event — no decision field"
@@ -71,13 +88,55 @@ echo ""
 echo "Test 4: Does not overwrite existing progress file"
 rm -rf "$PROGRESS_DIR"
 mkdir -p "$PROGRESS_DIR"
-echo "# Agent-written progress" > "$PROGRESS_DIR/main--test1234.md"
+echo "# Agent-written progress" > "$PROGRESS_DIR/${TEST_BRANCH}--test1234.md"
 jq --arg cwd "$TEST_DIR" '.cwd = $cwd' "$FIXTURES/stop.json" | bash "$HOOK_SCRIPT" > /dev/null 2>&1 || true
-assert_contains "existing file preserved" "$PROGRESS_DIR/main--test1234.md" "Agent-written progress"
+assert_contains "existing file preserved" "$PROGRESS_DIR/${TEST_BRANCH}--test1234.md" "Agent-written progress"
 
 echo ""
 echo "Test 5: _index.md lists progress files"
-assert_contains "index lists files" "$PROGRESS_DIR/_index.md" "main--test1234"
+assert_contains "index lists files" "$PROGRESS_DIR/_index.md" "${TEST_BRANCH}--test1234"
+
+echo ""
+echo "Test 6: Stop event with COMPLETE status — silent approve (no systemMessage)"
+rm -rf "$PROGRESS_DIR"
+mkdir -p "$PROGRESS_DIR"
+cat > "$PROGRESS_DIR/${TEST_BRANCH}--test1234.md" << 'EOF'
+# Harness Progress
+**Updated:** 2026-01-01T00:00:00Z
+
+## Status: COMPLETE
+EOF
+output=$(jq --arg cwd "$TEST_DIR" '.cwd = $cwd' "$FIXTURES/stop.json" | bash "$HOOK_SCRIPT" 2>&1 || true)
+if echo "$output" | jq -e '.systemMessage' > /dev/null 2>&1; then
+    echo "  FAIL: COMPLETE task should not produce systemMessage (got: $output)"
+    ((FAIL++)) || true
+else
+    if echo "$output" | jq -e '.decision == "approve"' > /dev/null 2>&1; then
+        echo "  PASS: COMPLETE task returns silent approve"
+        ((PASS++)) || true
+    else
+        echo "  FAIL: expected silent approve (got: $output)"
+        ((FAIL++)) || true
+    fi
+fi
+
+echo ""
+echo "Test 7: Stale files (7+ days) are cleaned up"
+rm -rf "$PROGRESS_DIR"
+mkdir -p "$PROGRESS_DIR"
+echo "# stale" > "$PROGRESS_DIR/old-branch--stale123.md"
+# Set file modification time to 8 days ago
+touch -t "$(date -v-8d +%Y%m%d%H%M.%S)" "$PROGRESS_DIR/old-branch--stale123.md"
+echo "# fresh" > "$PROGRESS_DIR/${TEST_BRANCH}--test1234.md"
+jq --arg cwd "$TEST_DIR" '.cwd = $cwd' "$FIXTURES/stop.json" | bash "$HOOK_SCRIPT" > /dev/null 2>&1 || true
+if [ -f "$PROGRESS_DIR/old-branch--stale123.md" ]; then
+    echo "  FAIL: stale file should have been cleaned up"
+    ((FAIL++)) || true
+else
+    echo "  PASS: stale file cleaned up"
+    ((PASS++)) || true
+fi
+assert_file_exists "fresh file kept" "$PROGRESS_DIR/${TEST_BRANCH}--test1234.md"
 
 # Cleanup
 rm -rf "$TEST_DIR"
