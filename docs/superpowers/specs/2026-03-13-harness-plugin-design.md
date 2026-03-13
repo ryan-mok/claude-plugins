@@ -83,13 +83,19 @@ All hooks receive JSON via stdin from Claude Code. Key fields:
 Fires on every tool call (`matcher: *`). Reads `session_id` from stdin JSON. Appends a fingerprint (tool name + target file + truncated error/result) to a rolling state file at `/tmp/harness-loop-state-${SESSION_ID_PREFIX}.jsonl` (first 8 chars of session_id). Keeps the last 20 entries.
 
 Detection patterns:
-- **Same-target repetition:** Same tool + same file path 3+ times in last 10 calls
-- **Error echo:** Same error message substring appears 3+ times
-- **Edit-test-fail cycle:** Write/Edit → Bash(test) → fail → repeat, 3+ iterations
+- **Same-target repetition:** Same tool + same file path 4+ times in last 10 calls (note: editing the same file 3 times is normal during TDD — threshold is 4 to reduce false positives)
+- **Error echo:** Same error message substring (first 100 chars) appears 3+ times in last 10 calls
+- **Edit-test-fail cycle:** Write/Edit → Bash → non-zero exit, repeated 3+ times on the same file (the Bash call is identified as a test by checking if the command contains common test runner names: `test`, `jest`, `pytest`, `cargo test`, `go test`, `npm test`, `vitest`, etc.)
 
-When a pattern triggers, the hook exits with code 2 and returns a systemMessage:
+When a pattern triggers, the hook exits with code 0 and returns JSON on stdout with a `systemMessage` field:
 
-> "LOOP DETECTED: You have attempted [pattern description] [N] times. STOP. Do not retry the same approach. Consult the harness:loop-recovery skill."
+```json
+{
+  "systemMessage": "LOOP DETECTED: You have edited src/api/handler.ts 4 times with similar errors. STOP. Do not retry the same approach. Use the harness:loop-recovery skill to find a fundamentally different approach."
+}
+```
+
+Note: exit code 0, not 2. This is PostToolUse — the tool already ran. We're injecting guidance into context, not blocking an operation.
 
 **Performance:** Must complete in <100ms. Uses `jq` for JSONL append and pattern matching. No LLM reasoning in the hot path.
 
@@ -122,7 +128,8 @@ Naming convention: `{branch-name}--{session-id-prefix}.md`
 
 **Hook: `progress-save.sh`** (Stop + PreCompact)
 
-On session end or pre-compaction:
+On session end or pre-compaction. **This hook always approves** — it saves state but never blocks the agent from stopping.
+
 1. Reads `session_id` and `cwd` from stdin JSON
 2. If the agent already wrote a progress file (the skill instructs this), leave it as-is
 3. If no progress file exists for this session, generate a minimal fallback from git:
@@ -183,15 +190,22 @@ Teaches agents to proactively write progress entries at natural milestones:
 
 **Problem:** CLAUDE.md rules are suggestions that rely on the LLM honoring text instructions. For critical boundaries, you need deterministic enforcement.
 
-**Primitive:** PreToolUse prompt hook + setup skill.
+**Primitive:** PreToolUse command hook + setup skill.
 
-**Hook: prompt-based PreToolUse** on `Write|Edit`
+**Hook: `constraint-check.sh`** on `Write|Edit`
 
-A two-stage hook:
+A single deterministic command hook. All v1 constraint types (import-boundary, file-pattern, custom) are pattern-based and can be evaluated with glob matching and regex — no LLM reasoning needed. This keeps constraint enforcement fast (<50ms) and predictable.
 
-1. **Fast-path (command hook):** A shell script checks if the target file path matches any rule's `from`/`in` glob pattern. If no rule applies to this file, the hook exits immediately (exit 0, <10ms). This avoids LLM calls for the majority of writes that don't touch constrained paths.
+The hook:
+1. Reads the target file path from `tool_input.file_path` in stdin JSON
+2. If `.claude/harness/constraints.json` does not exist, exits immediately (exit 0)
+3. Checks each rule's `from`/`in` glob against the target file path. If no rules match, exits (exit 0)
+4. For matching rules, evaluates the proposed content (`tool_input.new_string` for Edit, `tool_input.content` for Write) against the rule's `pattern` or `import` field using `grep -E`
+5. If a `block` severity rule is violated: returns `permissionDecision: "deny"` with the rule name and description
+6. If only `warn` severity rules are violated: returns `permissionDecision: "allow"` with a systemMessage warning
+7. If no violations: exits (exit 0)
 
-2. **Slow-path (prompt hook):** If the file matches a rule's glob, the prompt hook evaluates the proposed content against the matching rules. Uses LLM reasoning because constraints are often semantic ("this file shouldn't contain business logic"), not just syntactic. Expected latency: 2-5s per evaluation. The prompt includes only the matching rules (not the full ruleset) and the file content being written.
+Semantic constraints ("this file shouldn't contain business logic") are deferred to v2, which will add a prompt hook for `custom-semantic` type rules.
 
 **Constraint config** at `.claude/harness/constraints.json`:
 
@@ -423,23 +437,13 @@ harness/
             "timeout": 5
           }
         ]
-      },
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "prompt",
-            "prompt": "You are a constraint enforcement checker. Read the constraint rules from .claude/harness/constraints.json (if it exists). The file being written is $TOOL_INPUT. Check if any 'block' severity rules are violated. If violated, return 'deny' with the rule name and description. If only 'warn' rules are violated, return 'allow' with a warning. If no rules match or no constraints file exists, return 'allow'. Be concise.",
-            "timeout": 30
-          }
-        ]
       }
     ]
   }
 }
 ```
 
-Note: The PreToolUse has two entries for Write|Edit. Per Claude Code's hook execution model, all matching hooks run in **parallel** — the command hook and prompt hook fire simultaneously. The command hook (`constraint-check.sh`) does fast-path glob matching: if no constraint rules apply to the target file, it exits silently (exit 0). If rules do match, it exits with a systemMessage noting which rules apply. The prompt hook always fires but is the authoritative decision-maker (deny/allow). The command hook's value is providing immediate feedback and rule context to the transcript, not short-circuiting the prompt hook. For projects with no `.claude/harness/constraints.json`, the prompt hook returns "allow" immediately (no rules to evaluate), so the cost is minimal.
+Note: Constraint enforcement is a single deterministic command hook in v1. All constraint types as defined (import-boundary, file-pattern, custom) are pattern-based and don't require LLM reasoning. A prompt hook for semantic constraints (`custom-semantic` type) is planned for v2.
 
 **Runtime dependency:** `jq` is required for hook scripts (loop detection, progress save/load, constraint check). The `/harness-status` command should warn if `jq` is not found on the system PATH.
 
@@ -452,6 +456,8 @@ Note: The PreToolUse has two entries for Write|Edit. Per Claude Code's hook exec
 - atlassian plugin (Jira ticket context for `/harness` command)
 - code-simplifier plugin (simplify skill on completion)
 - pr-review-toolkit plugin (enhanced review on completion)
+
+**Graceful degradation:** The hooks (loop detection, progress, constraints) are fully independent and work without superpowers. The `/harness` command requires superpowers — if not installed, it should inform the user and suggest installing it. The `/harness` command detects Jira ticket IDs via the pattern `[A-Z][A-Z0-9]+-\d+` (e.g., `PROJ-1234`). If the atlassian plugin is not installed, it treats the ticket ID as a text label and proceeds without fetching context.
 
 ## Out of Scope for v1
 
