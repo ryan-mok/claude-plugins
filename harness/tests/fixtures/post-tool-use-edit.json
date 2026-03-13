@@ -1,0 +1,12 @@
+{
+  "session_id": "test1234-abcd-efgh-ijkl",
+  "cwd": "/tmp/test-project",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "/tmp/test-project/src/handler.ts",
+    "old_string": "old code",
+    "new_string": "new code"
+  },
+  "tool_result": "File edited successfully"
+}

@@ -1,0 +1,10 @@
+{
+  "session_id": "test1234-abcd-efgh-ijkl",
+  "cwd": "/tmp/test-project",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "npm test src/handler.test.ts"
+  },
+  "tool_result": "FAIL src/handler.test.ts\n  ● TypeError: Cannot read property 'id' of undefined"
+}
