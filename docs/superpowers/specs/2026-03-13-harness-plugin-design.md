@@ -28,6 +28,48 @@ The harness wraps **above and below** superpowers:
 └─────────────────────────────────────────────┘
 ```
 
+## Hook I/O Contract
+
+All hooks receive JSON via stdin from Claude Code. Key fields:
+
+```json
+{
+  "session_id": "abc123-def456-...",
+  "transcript_path": "/path/to/transcript.txt",
+  "cwd": "/current/working/dir",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Edit",
+  "tool_input": { "file_path": "/src/api/handler.ts", "old_string": "...", "new_string": "..." },
+  "tool_result": "File edited successfully"
+}
+```
+
+**Session ID:** Provided by Claude Code in the `session_id` field of every hook input. The first 8 characters are used as the session prefix for progress file naming.
+
+**Command hook output:** Return JSON via stdout. Exit code 0 = success (stdout shown in transcript). Exit code 2 = blocking error (stderr fed back to Claude as context).
+
+```json
+{
+  "systemMessage": "Message injected into Claude's context",
+  "continue": true,
+  "suppressOutput": false
+}
+```
+
+**PreToolUse hook output** (for constraint enforcement):
+
+```json
+{
+  "hookSpecificOutput": {
+    "permissionDecision": "deny",
+    "updatedInput": null
+  },
+  "systemMessage": "CONSTRAINT VIOLATION: no-cross-module-imports — API layer must not import from data layer directly"
+}
+```
+
+**Prompt hooks** differ from command hooks: instead of running a shell script, they send a prompt to the LLM for evaluation. Configured in hooks.json with `"type": "prompt"` and a `"prompt"` field instead of `"type": "command"`. The LLM returns a structured decision. Prompt hooks have a default 30s timeout vs 60s for command hooks.
+
 ## Components
 
 ### 1. Loop Detection
@@ -38,7 +80,7 @@ The harness wraps **above and below** superpowers:
 
 **Hook: `loop-detect.sh`**
 
-Fires on every tool call (`matcher: *`). Appends a fingerprint (tool name + target file + truncated error/result) to a rolling state file at `/tmp/harness-loop-state-${SESSION_ID}.jsonl`. Keeps the last 20 entries.
+Fires on every tool call (`matcher: *`). Reads `session_id` from stdin JSON. Appends a fingerprint (tool name + target file + truncated error/result) to a rolling state file at `/tmp/harness-loop-state-${SESSION_ID_PREFIX}.jsonl` (first 8 chars of session_id). Keeps the last 20 entries.
 
 Detection patterns:
 - **Same-target repetition:** Same tool + same file path 3+ times in last 10 calls
@@ -76,19 +118,25 @@ Teaches the agent a structured recovery process:
 
 Naming convention: `{branch-name}--{session-id-prefix}.md`
 
+**Two-part responsibility model:** The `progress-tracking` skill teaches the agent to maintain the progress file (writing semantic fields like "Current Status," "Next Steps," and "Key Decisions"). The hooks handle lifecycle boundaries — ensuring the file is loaded on start and that a git-based fallback snapshot exists on stop/compact even if the agent didn't write one.
+
 **Hook: `progress-save.sh`** (Stop + PreCompact)
 
-Captures a progress snapshot:
-- Reads recent git log (last 5 commits)
-- Writes structured markdown: current status, completed items, next steps, key decisions, key files touched
-- Regenerates `_index.md` with all active sessions
+On session end or pre-compaction:
+1. Reads `session_id` and `cwd` from stdin JSON
+2. If the agent already wrote a progress file (the skill instructs this), leave it as-is
+3. If no progress file exists for this session, generate a minimal fallback from git:
+   - Branch name, last 5 commits, list of files changed in this session (via `git diff --name-only`)
+   - This fallback is less rich than agent-written progress but better than nothing
+4. Regenerates `_index.md` by listing all progress files with their `**Updated:**` timestamps and first line of `## Current Status`
 
 **Hook: `progress-load.sh`** (SessionStart)
 
 On session start (including after compaction and resume):
-- Loads the session-specific progress file if resuming
-- Otherwise loads `_index.md` so the agent can see what other sessions have been working on
-- Outputs as systemMessage
+- Reads `session_id` from stdin JSON
+- If a progress file exists for this session ID prefix, outputs its contents as `systemMessage`
+- Otherwise, if `_index.md` exists, outputs it so the agent can see what other sessions have been working on
+- Returns exit code 0 with JSON: `{"systemMessage": "<file contents>"}`
 
 **Progress file format:**
 
@@ -129,6 +177,8 @@ Teaches agents to proactively write progress entries at natural milestones:
 
 **Cleanup:** Progress files older than 7 days are noted as stale in `_index.md`. The `/harness-status` command can show and prune them.
 
+**Gitignore:** The `.claude/harness/progress/` directory should be added to `.gitignore`. Progress files are ephemeral session state — they should not appear in diffs, PRs, or the repo history. The hook scripts will create the directory if it does not exist.
+
 ### 3. Architectural Constraint Enforcement
 
 **Problem:** CLAUDE.md rules are suggestions that rely on the LLM honoring text instructions. For critical boundaries, you need deterministic enforcement.
@@ -137,7 +187,11 @@ Teaches agents to proactively write progress entries at natural milestones:
 
 **Hook: prompt-based PreToolUse** on `Write|Edit`
 
-A prompt hook that reads `.claude/harness/constraints.json` and evaluates the proposed file change against the rules. Uses LLM reasoning because constraints are often semantic ("this file shouldn't contain business logic"), not just syntactic.
+A two-stage hook:
+
+1. **Fast-path (command hook):** A shell script checks if the target file path matches any rule's `from`/`in` glob pattern. If no rule applies to this file, the hook exits immediately (exit 0, <10ms). This avoids LLM calls for the majority of writes that don't touch constrained paths.
+
+2. **Slow-path (prompt hook):** If the file matches a rule's glob, the prompt hook evaluates the proposed content against the matching rules. Uses LLM reasoning because constraints are often semantic ("this file shouldn't contain business logic"), not just syntactic. Expected latency: 2-5s per evaluation. The prompt includes only the matching rules (not the full ruleset) and the file content being written.
 
 **Constraint config** at `.claude/harness/constraints.json`:
 
@@ -206,7 +260,7 @@ On kickoff:
 
 Teaches the agent to maintain harness awareness throughout the superpowers workflow:
 - Save progress at each phase transition
-- After execution completes, run `/simplify` on changed files
+- After execution completes, invoke the `simplify` skill on changed files (from code-simplifier plugin, if installed)
 - On completion, update progress file to "done" and optionally update Jira ticket
 - If loop detection fires during execution, follow the recovery skill before continuing
 
@@ -288,7 +342,8 @@ harness/
 │   └── scripts/
 │       ├── loop-detect.sh
 │       ├── progress-save.sh
-│       └── progress-load.sh
+│       ├── progress-load.sh
+│       └── constraint-check.sh
 ├── skills/
 │   ├── loop-recovery/
 │   │   └── SKILL.md
@@ -304,12 +359,87 @@ harness/
 └── README.md
 ```
 
-**hooks.json** registers:
-- `PostToolUse *` → `loop-detect.sh`
-- `Stop *` → `progress-save.sh`
-- `PreCompact *` → `progress-save.sh`
-- `SessionStart startup|resume|compact` → `progress-load.sh`
-- `PreToolUse Write|Edit` → prompt hook (constraint enforcement, inline)
+**hooks.json:**
+
+```json
+{
+  "description": "Harness engineering guardrails: loop detection, progress persistence, constraint enforcement",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/loop-detect.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/progress-save.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/progress-save.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/progress-load.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/constraint-check.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "You are a constraint enforcement checker. Read the constraint rules from .claude/harness/constraints.json (if it exists). The file being written is $TOOL_INPUT. Check if any 'block' severity rules are violated. If violated, return 'deny' with the rule name and description. If only 'warn' rules are violated, return 'allow' with a warning. If no rules match or no constraints file exists, return 'allow'. Be concise.",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Note: The PreToolUse has two hooks for Write|Edit — the command hook (`constraint-check.sh`) does fast-path glob matching and exits immediately if no rules apply to the target file. The prompt hook handles semantic evaluation when rules do match. Both run in parallel; the command hook's fast exit means no overhead when constraints don't apply.
 
 ## Dependencies
 
@@ -318,7 +448,7 @@ harness/
 
 **Optional (enhanced experience):**
 - atlassian plugin (Jira ticket context for `/harness` command)
-- code-simplifier plugin (`/simplify` on completion)
+- code-simplifier plugin (simplify skill on completion)
 - pr-review-toolkit plugin (enhanced review on completion)
 
 ## Out of Scope for v1
