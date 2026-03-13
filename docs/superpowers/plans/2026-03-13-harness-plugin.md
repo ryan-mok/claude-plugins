@@ -356,8 +356,9 @@ rm -f "${STATE_PREFIX}.jsonl"
 for i in 1 2 3; do
     # Edit call
     cat "$FIXTURES/post-tool-use-edit.json" | bash "$HOOK_SCRIPT" > /dev/null 2>&1 || true
-    # Failing test call
-    output=$(cat "$FIXTURES/post-tool-use-bash-fail.json" | bash "$HOOK_SCRIPT" 2>&1 || true)
+    # Failing test call — unique error each time so Pattern 2 (error echo) doesn't shadow this
+    output=$(jq --arg err "FAIL: Error variant $i — cannot read property of undefined" \
+        '.tool_result = $err' "$FIXTURES/post-tool-use-bash-fail.json" | bash "$HOOK_SCRIPT" 2>&1 || true)
 done
 assert_loop_detected "edit-test-fail cycle" "$output"
 
@@ -1042,10 +1043,10 @@ if [ -z "$CONTENT" ]; then
 fi
 
 # Output using hookSpecificOutput.additionalContext (SessionStart format)
+# Always use this format — it is the correct output for Claude Code plugin hooks.
 ESCAPED=$(escape_for_json "$CONTENT")
 
-if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
-    cat <<EOF
+cat <<EOF
 {
   "hookSpecificOutput": {
     "hookEventName": "SessionStart",
@@ -1053,13 +1054,6 @@ if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
   }
 }
 EOF
-else
-    cat <<EOF
-{
-  "additional_context": "${ESCAPED}"
-}
-EOF
-fi
 
 exit 0
 ```
@@ -1213,7 +1207,7 @@ echo "=== Constraint Check Tests ==="
 
 echo ""
 echo "Test 1: No constraints file — allow silently"
-output=$(jq --arg cwd "$TEST_DIR" '.cwd = $cwd' "$FIXTURES/pre-tool-use-write.json" | bash "$HOOK_SCRIPT" 2>&1)
+output=$(jq --arg cwd "$TEST_DIR" --arg fp "$TEST_DIR/src/api/handler.ts" '.cwd = $cwd | .tool_input.file_path = $fp' "$FIXTURES/pre-tool-use-write.json" | bash "$HOOK_SCRIPT" 2>&1)
 EXIT_CODE=$?
 if [ "$EXIT_CODE" -eq 0 ] && [ -z "$output" ]; then
     echo "  PASS: no constraints = silent allow"
@@ -1239,7 +1233,7 @@ cat > "$TEST_DIR/.claude/harness/constraints.json" << 'RULES'
   ]
 }
 RULES
-output=$(jq --arg cwd "$TEST_DIR" '.cwd = $cwd' "$FIXTURES/pre-tool-use-write.json" | bash "$HOOK_SCRIPT" 2>&1)
+output=$(jq --arg cwd "$TEST_DIR" --arg fp "$TEST_DIR/src/api/handler.ts" '.cwd = $cwd | .tool_input.file_path = $fp' "$FIXTURES/pre-tool-use-write.json" | bash "$HOOK_SCRIPT" 2>&1)
 if [ -z "$output" ]; then
     echo "  PASS: no matching rules = silent allow"
     ((PASS++))
@@ -1263,7 +1257,7 @@ cat > "$TEST_DIR/.claude/harness/constraints.json" << 'RULES'
   ]
 }
 RULES
-output=$(jq --arg cwd "$TEST_DIR" '.cwd = $cwd' "$FIXTURES/pre-tool-use-write.json" | bash "$HOOK_SCRIPT" 2>&1)
+output=$(jq --arg cwd "$TEST_DIR" --arg fp "$TEST_DIR/src/api/handler.ts" '.cwd = $cwd | .tool_input.file_path = $fp' "$FIXTURES/pre-tool-use-write.json" | bash "$HOOK_SCRIPT" 2>&1)
 if echo "$output" | jq -e '.hookSpecificOutput.permissionDecision == "allow"' > /dev/null 2>&1 && \
    echo "$output" | jq -e '.systemMessage' 2>/dev/null | grep -q "no-env-in-source"; then
     echo "  PASS: warn rule = allow + systemMessage"
@@ -1288,7 +1282,7 @@ cat > "$TEST_DIR/.claude/harness/constraints.json" << 'RULES'
   ]
 }
 RULES
-output=$(jq --arg cwd "$TEST_DIR" '.cwd = $cwd' "$FIXTURES/pre-tool-use-write.json" | bash "$HOOK_SCRIPT" 2>&1)
+output=$(jq --arg cwd "$TEST_DIR" --arg fp "$TEST_DIR/src/api/handler.ts" '.cwd = $cwd | .tool_input.file_path = $fp' "$FIXTURES/pre-tool-use-write.json" | bash "$HOOK_SCRIPT" 2>&1)
 if echo "$output" | jq -e '.hookSpecificOutput.permissionDecision == "deny"' > /dev/null 2>&1; then
     echo "  PASS: block rule = deny"
     ((PASS++))
@@ -1312,7 +1306,7 @@ cat > "$TEST_DIR/.claude/harness/constraints.json" << 'RULES'
   ]
 }
 RULES
-output=$(jq --arg cwd "$TEST_DIR" '.cwd = $cwd' "$FIXTURES/pre-tool-use-write.json" | bash "$HOOK_SCRIPT" 2>&1)
+output=$(jq --arg cwd "$TEST_DIR" --arg fp "$TEST_DIR/src/api/handler.ts" '.cwd = $cwd | .tool_input.file_path = $fp' "$FIXTURES/pre-tool-use-write.json" | bash "$HOOK_SCRIPT" 2>&1)
 if echo "$output" | jq -e '.hookSpecificOutput.permissionDecision == "deny"' > /dev/null 2>&1; then
     echo "  PASS: import-boundary blocks cross-layer import"
     ((PASS++))
@@ -1336,7 +1330,7 @@ cat > "$TEST_DIR/.claude/harness/constraints.json" << 'RULES'
   ]
 }
 RULES
-output=$(jq --arg cwd "$TEST_DIR" '.cwd = $cwd' "$FIXTURES/pre-tool-use-write.json" | bash "$HOOK_SCRIPT" 2>&1)
+output=$(jq --arg cwd "$TEST_DIR" --arg fp "$TEST_DIR/src/api/handler.ts" '.cwd = $cwd | .tool_input.file_path = $fp' "$FIXTURES/pre-tool-use-write.json" | bash "$HOOK_SCRIPT" 2>&1)
 if [ -z "$output" ]; then
     echo "  PASS: non-matching pattern = silent allow"
     ((PASS++))
