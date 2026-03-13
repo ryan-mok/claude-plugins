@@ -157,9 +157,11 @@ Naming convention: `{branch-name}--{session-id-prefix}.md`
 
 **Hook: `progress-save.sh`** (Stop + PreCompact)
 
-On session end or pre-compaction. **This hook always approves** — it saves state but never blocks the agent from stopping.
+On session end or pre-compaction. The same script handles both Stop and PreCompact events. It reads `hook_event_name` from stdin to determine the output format:
+- For Stop: returns `{"decision": "approve", ...}` (always approves — saves state but never blocks)
+- For PreCompact: returns standard output `{}` (PreCompact has no decision gate)
 
-1. Reads `session_id` and `cwd` from stdin JSON
+1. Reads `session_id`, `cwd`, and `hook_event_name` from stdin JSON
 2. If the agent already wrote a progress file (the skill instructs this), leave it as-is
 3. If no progress file exists for this session, generate a minimal fallback from git:
    - Branch name, last 5 commits, list of files changed in this session (via `git diff --name-only`)
@@ -170,7 +172,7 @@ On session end or pre-compaction. **This hook always approves** — it saves sta
 
 On session start (including after compaction and resume):
 - Reads `session_id` from stdin JSON
-- If a progress file exists for this session ID prefix, outputs its contents as `systemMessage`
+- If a progress file exists for this session ID prefix, outputs its contents via `hookSpecificOutput.additionalContext`
 - Otherwise, if `_index.md` exists, outputs it so the agent can see what other sessions have been working on
 - Returns exit code 0 with JSON using `hookSpecificOutput.additionalContext` (not `systemMessage` — this is the correct SessionStart output format per the superpowers implementation)
 
@@ -233,6 +235,8 @@ The hook:
 5. If a `block` severity rule is violated: returns `permissionDecision: "deny"` with the rule name and description
 6. If only `warn` severity rules are violated: returns `permissionDecision: "allow"` with a systemMessage warning
 7. If no violations: exits (exit 0)
+
+**Violation logging:** When a violation is detected (block or warn), the hook appends an entry to `/tmp/harness-constraint-log-${SESSION_ID_PREFIX}.jsonl` with the rule name, target file, severity, and timestamp. The `/harness-status` command reads this log to report violation counts and details.
 
 Semantic constraints ("this file shouldn't contain business logic") are deferred to v2, which will add a prompt hook for `custom-semantic` type rules.
 
