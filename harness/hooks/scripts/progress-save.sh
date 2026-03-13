@@ -42,8 +42,16 @@ fi
 # Check if the task is already marked complete
 TASK_COMPLETE=false
 if [ "$AGENT_WROTE_PROGRESS" = true ]; then
-    if grep -qi '## Status: COMPLETE\|status to "Done"\|Current Status.*[Cc]omplete\|Current Status.*[Dd]one' "$PROGRESS_FILE" 2>/dev/null; then
+    # Check for explicit status markers on the same line
+    if grep -qiE '## Status: COMPLETE|status to "Done"' "$PROGRESS_FILE" 2>/dev/null; then
         TASK_COMPLETE=true
+    fi
+    # Check if the line AFTER "## Current Status" contains complete/done
+    if [ "$TASK_COMPLETE" = false ]; then
+        STATUS_LINE=$(sed -n '/^## Current Status/{n;p;}' "$PROGRESS_FILE" 2>/dev/null | head -1)
+        if echo "$STATUS_LINE" | grep -qiE 'complete|done'; then
+            TASK_COMPLETE=true
+        fi
     fi
 fi
 
