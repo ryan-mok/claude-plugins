@@ -7,8 +7,24 @@ source "$SCRIPT_DIR/lib.sh"
 # Read all stdin
 INPUT=$(cat)
 
-# Extract fields
+# Only run if harness is active in this session (agent-written progress file exists)
 SESSION_PREFIX=$(get_session_prefix "$INPUT")
+CWD=$(get_field "$INPUT" ".cwd")
+CWD=$(cd "$CWD" && pwd -P)
+GIT_ROOT=$(get_git_root "$CWD")
+PROGRESS_DIR="$GIT_ROOT/.claude/harness/progress"
+HARNESS_ACTIVE=false
+if [ -d "$PROGRESS_DIR" ]; then
+    for f in "$PROGRESS_DIR"/*--"${SESSION_PREFIX}".md; do
+        if [ -f "$f" ] && ! grep -q '<!-- harness-fallback -->' "$f" 2>/dev/null; then
+            HARNESS_ACTIVE=true
+            break
+        fi
+    done
+fi
+if [ "$HARNESS_ACTIVE" = false ]; then
+    exit 0
+fi
 TOOL_NAME=$(get_field "$INPUT" ".tool_name")
 FILE_PATH=$(get_field "$INPUT" ".tool_input.file_path // .tool_input.command // \"\"")
 TOOL_RESULT=$(get_field "$INPUT" ".tool_result // \"\"")
