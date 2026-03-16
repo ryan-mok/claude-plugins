@@ -58,6 +58,13 @@ if [ "$AGENT_WROTE_PROGRESS" = true ]; then
             TASK_COMPLETE=true
         fi
     fi
+    # Check YAML frontmatter for status: complete
+    if [ "$TASK_COMPLETE" = false ]; then
+        YAML_STATUS=$(sed -n '/^---$/,/^---$/{ s/^status: *//p; }' "$PROGRESS_FILE" 2>/dev/null)
+        if echo "$YAML_STATUS" | grep -qiE 'complete|done'; then
+            TASK_COMPLETE=true
+        fi
+    fi
 fi
 
 # Only create a fallback progress file if the agent wrote one (meaning harness was active)
@@ -120,11 +127,30 @@ done
         [ -f "$f" ] || continue
         HAS_ENTRIES=true
         FNAME=$(basename "$f")
-        UPDATED=$(grep -m1 '^\*\*Updated:\*\*' "$f" 2>/dev/null | sed 's/\*\*Updated:\*\* //' || echo "unknown")
-        STATUS=$(sed -n '/^## Current Status/{n;p;}' "$f" 2>/dev/null | head -1 || echo "unknown")
+        UPDATED=$(grep -m1 '^\*\*Updated:\*\*' "$f" 2>/dev/null | sed 's/\*\*Updated:\*\* //' || echo "")
+        # Fall back to YAML frontmatter session_start, then file mtime
+        if [ -z "$UPDATED" ]; then
+            UPDATED=$(sed -n '/^---$/,/^---$/{ s/^session_start: *//p; }' "$f" 2>/dev/null)
+        fi
+        if [ -z "$UPDATED" ]; then
+            UPDATED=$(stat -f%Sm -t%Y-%m-%dT%H:%M:%SZ "$f" 2>/dev/null || stat -c%y "$f" 2>/dev/null || echo "unknown")
+        fi
+        STATUS=$(sed -n '/^## Current Status/{n;p;}' "$f" 2>/dev/null | head -1 || echo "")
         # Also check for non-standard status headers
-        if [ "$STATUS" = "unknown" ] || [ -z "$STATUS" ]; then
-            STATUS=$(grep -m1 '^## Status:' "$f" 2>/dev/null | sed 's/^## Status: //' || echo "unknown")
+        if [ -z "$STATUS" ]; then
+            STATUS=$(grep -m1 '^## Status:' "$f" 2>/dev/null | sed 's/^## Status: //' || echo "")
+        fi
+        # Fall back to YAML frontmatter status/phase
+        if [ -z "$STATUS" ]; then
+            YAML_STATUS=$(sed -n '/^---$/,/^---$/{ s/^status: *//p; }' "$f" 2>/dev/null)
+            YAML_PHASE=$(sed -n '/^---$/,/^---$/{ s/^phase: *//p; }' "$f" 2>/dev/null)
+            if [ -n "$YAML_STATUS" ] && [ -n "$YAML_PHASE" ]; then
+                STATUS="$YAML_STATUS ($YAML_PHASE)"
+            elif [ -n "$YAML_STATUS" ]; then
+                STATUS="$YAML_STATUS"
+            else
+                STATUS="unknown"
+            fi
         fi
         echo "- **$FNAME** — $STATUS (updated: $UPDATED)"
     done
