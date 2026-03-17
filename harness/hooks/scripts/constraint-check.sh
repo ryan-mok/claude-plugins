@@ -20,19 +20,22 @@ else
     exit 0
 fi
 
+# Resolve git root (works in worktrees too)
+GIT_ROOT=$(get_git_root "$CWD")
+
 # Check for constraints file
-CONSTRAINTS_FILE="$CWD/.claude/harness/constraints.json"
+CONSTRAINTS_FILE="$GIT_ROOT/.claude/harness/constraints.json"
 if [ ! -f "$CONSTRAINTS_FILE" ]; then
     exit 0
 fi
 
-# Make file path relative to CWD for glob matching
-REL_PATH="${FILE_PATH#$CWD/}"
+# Make file path relative to git root for glob matching
+REL_PATH="${FILE_PATH#$GIT_ROOT/}"
 
 # Process rules
 VIOLATIONS=""
 MAX_SEVERITY="none"  # none < warn < block
-LOG_FILE="/tmp/harness-constraint-log-${SESSION_PREFIX}.jsonl"
+BRANCH=$(git -C "$CWD" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
 
 RULE_COUNT=$(jq '.rules | length' "$CONSTRAINTS_FILE")
 
@@ -82,10 +85,10 @@ for i in $(seq 0 $((RULE_COUNT - 1))); do
     if [ "$VIOLATED" = true ]; then
         VIOLATIONS="${VIOLATIONS}${RULE_NAME}: ${RULE_DESC}\n"
 
-        # Log violation
-        TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-        jq -n --arg name "$RULE_NAME" --arg file "$REL_PATH" --arg severity "$SEVERITY" --arg ts "$TIMESTAMP" \
-            '{rule: $name, file: $file, severity: $severity, ts: $ts}' >> "$LOG_FILE"
+        # Emit analytics event
+        DECISION="allow"
+        [[ "$SEVERITY" == "block" ]] && DECISION="deny"
+        emit_event "constraint.violation" "$(jq -n -c --arg r "$RULE_NAME" --arg f "$REL_PATH" --arg s "$SEVERITY" --arg d "$DECISION" '{rule:$r,file:$f,severity:$s,decision:$d}')"
 
         if [ "$SEVERITY" = "block" ]; then
             MAX_SEVERITY="block"
