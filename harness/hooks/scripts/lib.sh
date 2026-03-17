@@ -57,3 +57,67 @@ get_field() {
     local field="$2"
     echo "$input" | jq -r "$field // \"\""
 }
+
+# Return the analytics directory path under the main repo root.
+# Usage: ANALYTICS_DIR=$(get_analytics_dir "$CWD")
+get_analytics_dir() {
+    local cwd="${1:-$CWD}"
+    local root
+    root=$(get_git_root "$cwd")
+    echo "$root/.claude/harness/analytics"
+}
+
+# Return true (exit 0) if running in a git worktree, false (exit 1) otherwise.
+# Compares git show-toplevel with the main repo root from get_git_root.
+# Usage: if is_worktree "$CWD"; then ...
+is_worktree() {
+    local cwd="${1:-$CWD}"
+    local toplevel
+    toplevel=$(cd "$cwd" && git rev-parse --show-toplevel 2>/dev/null) || return 1
+    # Resolve symlinks for consistent comparison
+    if [ -d "$toplevel" ]; then
+        toplevel=$(cd "$toplevel" && pwd -P)
+    fi
+    local root
+    root=$(get_git_root "$cwd")
+    [ "$toplevel" != "$root" ]
+}
+
+# Append an analytics event to events.jsonl.
+# Requires CWD, SESSION_PREFIX, BRANCH to be set by caller.
+# Usage: emit_event "session.start" '{"extra":"data"}' "single"
+emit_event() {
+    local event_type="$1"
+    local extra_fields="${2:-"{}"}"
+    local scope="${3:-single}"
+    local analytics_dir
+    analytics_dir=$(get_analytics_dir "$CWD")
+    mkdir -p "$analytics_dir"
+
+    local ts
+    ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    local wt=false
+    if is_worktree "$CWD"; then
+        wt=true
+    fi
+
+    local root
+    root=$(get_git_root "$CWD")
+
+    local envelope
+    envelope=$(jq -n \
+        --arg ts "$ts" \
+        --arg event "$event_type" \
+        --arg session_id "$SESSION_PREFIX" \
+        --arg branch "$BRANCH" \
+        --arg scope "$scope" \
+        --argjson worktree "$wt" \
+        --arg repo_root "$root" \
+        '{ts: $ts, event: $event, session_id: $session_id, branch: $branch, scope: $scope, worktree: $worktree, repo_root: $repo_root}')
+
+    local merged
+    merged=$(echo "$envelope" | jq --argjson extra "$extra_fields" '. + $extra')
+
+    echo "$merged" | jq -c '.' >> "$analytics_dir/events.jsonl"
+}
