@@ -140,6 +140,62 @@ else
 fi
 assert_file_exists "fresh file kept" "$PROGRESS_DIR/${TEST_BRANCH}--test1234.md"
 
+echo ""
+echo "Test 8: PreCompact with progress dir emits session.compact event"
+rm -rf "$PROGRESS_DIR"
+mkdir -p "$PROGRESS_DIR"
+ANALYTICS_DIR="$TEST_DIR/.claude/harness/analytics"
+rm -rf "$ANALYTICS_DIR"
+echo "# in progress" > "$PROGRESS_DIR/${TEST_BRANCH}--test1234.md"
+jq --arg cwd "$TEST_DIR" '.cwd = $cwd' "$FIXTURES/pre-compact.json" | bash "$HOOK_SCRIPT" > /dev/null 2>&1 || true
+EVENTS_FILE="$ANALYTICS_DIR/events.jsonl"
+assert_file_exists "events.jsonl created" "$EVENTS_FILE"
+if [ -f "$EVENTS_FILE" ]; then
+    COMPACT_EVENT=$(jq -r 'select(.event=="session.compact")' "$EVENTS_FILE" 2>/dev/null)
+    if [ -n "$COMPACT_EVENT" ]; then
+        echo "  PASS: session.compact event found"
+        ((PASS++)) || true
+        CCOUNT=$(echo "$COMPACT_EVENT" | jq -r '.compaction_count')
+        if [ "$CCOUNT" = "1" ]; then
+            echo "  PASS: compaction_count is 1"
+            ((PASS++)) || true
+        else
+            echo "  FAIL: expected compaction_count=1, got $CCOUNT"
+            ((FAIL++)) || true
+        fi
+    else
+        echo "  FAIL: session.compact event not found in events.jsonl"
+        ((FAIL++)) || true
+        echo "  SKIP: compaction_count check (no event)"
+        ((FAIL++)) || true
+    fi
+else
+    echo "  SKIP: session.compact check (no events file)"
+    ((FAIL++)) || true
+    echo "  SKIP: compaction_count check (no events file)"
+    ((FAIL++)) || true
+fi
+
+echo ""
+echo "Test 9: Stop event does NOT emit session.compact"
+rm -rf "$PROGRESS_DIR"
+mkdir -p "$PROGRESS_DIR"
+rm -rf "$ANALYTICS_DIR"
+echo "# in progress" > "$PROGRESS_DIR/${TEST_BRANCH}--test1234.md"
+jq --arg cwd "$TEST_DIR" '.cwd = $cwd' "$FIXTURES/stop.json" | bash "$HOOK_SCRIPT" > /dev/null 2>&1 || true
+if [ -f "$ANALYTICS_DIR/events.jsonl" ]; then
+    if jq -e 'select(.event=="session.compact")' "$ANALYTICS_DIR/events.jsonl" > /dev/null 2>&1; then
+        echo "  FAIL: Stop event should not emit session.compact"
+        ((FAIL++)) || true
+    else
+        echo "  PASS: Stop event does not emit session.compact"
+        ((PASS++)) || true
+    fi
+else
+    echo "  PASS: Stop event does not emit session.compact (no events file)"
+    ((PASS++)) || true
+fi
+
 # Cleanup
 rm -rf "$TEST_DIR"
 

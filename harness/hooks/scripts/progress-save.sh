@@ -159,6 +159,16 @@ done
     fi
 } > "$PROGRESS_DIR/_index.md"
 
+# Emit session.compact event (PreCompact only)
+if [[ "$EVENT" == "PreCompact" && -d "$PROGRESS_DIR" ]]; then
+    EVENTS_FILE="$(get_analytics_dir "$CWD")/events.jsonl"
+    COMPACT_COUNT=1
+    if [[ -f "$EVENTS_FILE" ]]; then
+        COMPACT_COUNT=$(( $(jq -r "select(.event==\"session.compact\" and .session_id==\"$SESSION_PREFIX\")" "$EVENTS_FILE" 2>/dev/null | wc -l | tr -d ' ') + 1 ))
+    fi
+    emit_event "session.compact" "{\"compaction_count\":$COMPACT_COUNT}"
+fi
+
 # Output based on event type
 if [ "$EVENT" = "Stop" ]; then
     if [ "$TASK_COMPLETE" = true ]; then
