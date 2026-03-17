@@ -66,6 +66,17 @@ if [ -z "$CONTENT" ] && [ -f "$PROGRESS_DIR/_index.md" ]; then
     CONTENT=$(cat "$PROGRESS_DIR/_index.md")
 fi
 
+# Emit session.start analytics event (progress dir exists at this point)
+if [[ -d "$PROGRESS_DIR" ]]; then
+    BRANCH="${BRANCH:-$(git -C "$CWD" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")}"
+    if [ -n "$CONTENT" ]; then
+        RESUMED=true
+    else
+        RESUMED=false
+    fi
+    emit_event "session.start" "{\"resumed\":$RESUMED}"
+fi
+
 # Nothing to output
 if [ -z "$CONTENT" ]; then
     exit 0
