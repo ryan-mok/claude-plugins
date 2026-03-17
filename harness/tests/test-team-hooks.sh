@@ -39,8 +39,9 @@ echo "=== Team Hook Tests ==="
 echo ""
 echo "Test 1: team-task-verify.sh emits team.task_completed with scope team"
 rm -rf "$ANALYTICS_DIR"
-jq --arg cwd "$TEST_DIR" '.cwd = $cwd' "$FIXTURES/task-completed.json" | bash "$TASK_VERIFY_SCRIPT" > /dev/null 2>&1 || true
-EXIT_CODE=${PIPESTATUS[1]:-$?}
+TC_INPUT=$(jq --arg cwd "$TEST_DIR" '.cwd = $cwd' "$FIXTURES/task-completed.json")
+EXIT_CODE=0
+bash "$TASK_VERIFY_SCRIPT" <<< "$TC_INPUT" > /dev/null 2>&1 || EXIT_CODE=$?
 EVENTS_FILE="$ANALYTICS_DIR/events.jsonl"
 
 assert_eq "exit code is 0" "0" "$EXIT_CODE"
@@ -88,8 +89,9 @@ fi
 echo ""
 echo "Test 3: team-idle-check.sh emits team.agent_idle with scope team"
 rm -rf "$ANALYTICS_DIR"
-jq --arg cwd "$TEST_DIR" '.cwd = $cwd' "$FIXTURES/teammate-idle.json" | bash "$IDLE_CHECK_SCRIPT" > /dev/null 2>&1 || true
-EXIT_CODE=${PIPESTATUS[1]:-$?}
+TI_INPUT=$(jq --arg cwd "$TEST_DIR" '.cwd = $cwd' "$FIXTURES/teammate-idle.json")
+EXIT_CODE=0
+bash "$IDLE_CHECK_SCRIPT" <<< "$TI_INPUT" > /dev/null 2>&1 || EXIT_CODE=$?
 EVENTS_FILE="$ANALYTICS_DIR/events.jsonl"
 
 assert_eq "exit code is 0" "0" "$EXIT_CODE"
@@ -133,7 +135,8 @@ echo ""
 echo "Test 5: task_id defaults to unknown when missing from input"
 rm -rf "$ANALYTICS_DIR"
 # Send input without task_id
-jq --arg cwd "$TEST_DIR" '{session_id: .session_id, cwd: $cwd, hook_event_name: "TaskCompleted"}' "$FIXTURES/task-completed.json" | bash "$TASK_VERIFY_SCRIPT" > /dev/null 2>&1 || true
+TC_INPUT_NO_TID=$(jq --arg cwd "$TEST_DIR" '{session_id: .session_id, cwd: $cwd, hook_event_name: "TaskCompleted"}' "$FIXTURES/task-completed.json")
+bash "$TASK_VERIFY_SCRIPT" <<< "$TC_INPUT_NO_TID" > /dev/null 2>&1 || true
 EVENTS_FILE="$ANALYTICS_DIR/events.jsonl"
 if [ -f "$EVENTS_FILE" ]; then
     TASK_ID=$(jq -r 'select(.event=="team.task_completed") | .task_id' "$EVENTS_FILE" | tail -1)
@@ -148,7 +151,8 @@ fi
 echo ""
 echo "Test 6: advisory_signals counts are 0 with no prior events"
 rm -rf "$ANALYTICS_DIR"
-jq --arg cwd "$TEST_DIR" '.cwd = $cwd' "$FIXTURES/task-completed.json" | bash "$TASK_VERIFY_SCRIPT" > /dev/null 2>&1 || true
+TC_INPUT_T6=$(jq --arg cwd "$TEST_DIR" '.cwd = $cwd' "$FIXTURES/task-completed.json")
+bash "$TASK_VERIFY_SCRIPT" <<< "$TC_INPUT_T6" > /dev/null 2>&1 || true
 EVENTS_FILE="$ANALYTICS_DIR/events.jsonl"
 if [ -f "$EVENTS_FILE" ]; then
     EVENT_LINE=$(grep '"team.task_completed"' "$EVENTS_FILE" | tail -1)
