@@ -60,10 +60,53 @@ Prevents specific patterns from appearing in files matching a glob. Use for bann
 
 Identical to file-pattern. Use for project-specific rules that don't fit the other categories.
 
+### semantic
+
+Enforces higher-level code quality rules that require understanding context beyond simple pattern matching. Semantic rules are evaluated by an agent hook that reasons about whether the write violates the rule's intent.
+
+```json
+{
+  "name": "no-business-logic-in-controllers",
+  "type": "semantic",
+  "description": "Controllers must delegate to service layer — no inline business logic, database queries, or complex transformations",
+  "deny": {
+    "in": "src/controllers/**"
+  },
+  "severity": "block"
+}
+```
+
+- `in`: glob pattern matching file paths to check
+- The agent hook evaluates the file content against the rule description using LLM reasoning
+- Semantic rules only support `block` severity (see Severity Levels below)
+
+### cross-file
+
+Enforces invariants that span multiple files — for example, ensuring that every API route has a corresponding test file or that every database model has a migration.
+
+```json
+{
+  "name": "api-routes-need-tests",
+  "type": "cross-file",
+  "description": "Every API route file must have a corresponding test file",
+  "deny": {
+    "in": "src/routes/**/*.ts",
+    "requires": "tests/routes/**/*.test.ts"
+  },
+  "severity": "block"
+}
+```
+
+- `in`: glob pattern matching the source files being checked
+- `requires`: glob pattern that must have a corresponding match for each source file
+- Cross-file rules only support `block` severity (see Severity Levels below)
+
 ## Severity Levels
 
 - **block** — prevents the write entirely. Use for rules that must never be violated (security boundaries, critical architectural invariants).
-- **warn** — allows the write but injects a warning into context. Use for guidelines that have legitimate exceptions.
+- **warn** — allows the write but injects a warning into context. Use for guidelines that have legitimate exceptions. Only valid for `import-boundary`, `file-pattern`, and `custom` rule types.
+
+**Severity validation:** Semantic and cross-file rules only support `block` severity. If a `semantic` or `cross-file` rule specifies `"severity": "warn"`, reject it with the error: "Semantic and cross-file rules only support 'block' severity."
 
 ## Defining Good Constraints
 
@@ -88,3 +131,34 @@ Start new rules with `warn` severity. Observe whether they trigger correctly bef
 ## Checking Constraint Status
 
 Run `/harness-status --constraints` to see all loaded rules and recent violation history.
+
+## Agent Hook Lifecycle Management
+
+Semantic and cross-file rules require an agent hook to evaluate writes. The agent must manage this hook entry in `.claude/settings.json` as rules are added and removed.
+
+### When adding the first semantic or cross-file rule
+
+1. Read `.claude/settings.json`
+2. Merge the following agent hook entry into the `hooks.PreToolUse` array:
+
+```json
+{
+  "type": "agent",
+  "prompt": "You are a semantic constraint checker. For each file write, evaluate whether it violates any semantic or cross-file rules in .claude/harness/constraints.json. Decision tree: 1) Read the constraint rules. 2) For semantic rules: does the new file content violate the rule's description for files matching the glob? 3) For cross-file rules: does a corresponding file exist matching the 'requires' pattern? 4) If any rule is violated, respond with ok: false and explain which rule and why. 5) If no rules are violated, respond with ok: true.",
+  "timeout": 60
+}
+```
+
+3. Write the updated settings back to `.claude/settings.json`
+
+### When removing the last semantic or cross-file rule
+
+1. Read `.claude/settings.json`
+2. Remove the harness agent hook entry from the `hooks.PreToolUse` array
+3. Write the updated settings back to `.claude/settings.json`
+
+This ensures the agent hook is only active when there are rules that need it, avoiding unnecessary overhead for projects that only use pattern-based rules.
+
+## Performance Considerations
+
+Semantic and cross-file rules add ~3-5s to every file write. Use narrow globs to limit which files trigger evaluation. For example, prefer `src/controllers/**` over `src/**` if the rule only applies to controllers.

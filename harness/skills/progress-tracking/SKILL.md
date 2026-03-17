@@ -28,6 +28,11 @@ To determine the file path:
 Follow this structure exactly — the harness hooks parse specific headings:
 
 ```
+---
+team_context: false
+mode: harness
+---
+
 # Harness Progress
 **Updated:** {ISO 8601 timestamp}
 **Branch:** {branch name}
@@ -50,7 +55,33 @@ Follow this structure exactly — the harness hooks parse specific headings:
 
 ## Key Files
 - {path/to/important/file — helps a fresh context find relevant code fast}
+
+## Semantic Constraint Notes
+- [TIMESTAMP] Rule RULE_NAME blocked edit to FILE — ACTION_TAKEN
+
+## Agent Outcome
+success
 ```
+
+### YAML Frontmatter Fields
+
+- `team_context` — set to `true` when the session involves agent teams, `false` otherwise
+- `mode` — one of `harness`, `harness-auto`, or `organic` indicating how the session was orchestrated
+
+### Semantic Constraint Notes
+
+Log entries when semantic constraints block writes. Format each entry as:
+- `[TIMESTAMP] Rule RULE_NAME blocked edit to FILE — ACTION_TAKEN`
+
+This section helps future sessions understand which constraints were hit and how they were resolved.
+
+### Agent Outcome
+
+A single word on the line after the heading indicating the final outcome of the session:
+- `success` — all objectives completed
+- `partial` — some objectives completed, others remain
+- `failed` — objectives could not be completed
+- `abandoned` — session was abandoned before completion
 
 ## Writing Effective Progress
 

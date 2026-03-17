@@ -125,3 +125,24 @@ Each gate allows a maximum of 3 self-review iterations. If issues persist after 
 - If superpowers is not installed: the hooks still work, but the orchestration flow cannot invoke superpowers skills. Log an error in progress and halt.
 - If atlassian plugin is not installed: skip Jira integration silently. Treat ticket IDs as text labels.
 - If code-simplifier is not installed: skip the simplify step after execution.
+
+## Analytics Awareness
+
+- Check `/harness-status` after every 3rd implementation step (balance thoroughness with speed)
+- If `outcome_agreement` has been `false` in recent sessions on this branch, increase self-verification rigor
+- If loop count > 3 or violation count > 2, pause and invoke the harness:loop-recovery skill before continuing
+
+## Team Mode
+
+- When using agent teams, decompose work into tasks with explicit file ownership — no two tasks should modify the same file
+- After each task completion, self-review advisory signals via `/harness-status --team` and decide whether to reopen tasks — no waiting for human input
+- If a task had high `recent_loops_on_branch` or `recent_blocked_violations`, reopen it via the task list and re-execute
+- Run the full test suite before accepting the team's collective output
+- Write `team_context: true` in progress file YAML frontmatter
+- Document all team-related decisions in the progress file's Key Decisions section
+
+## Semantic Constraint Handling
+
+- When a semantic constraint blocks a write (`ok: false`), log it in the progress file's "Semantic Constraint Notes" section with timestamp, rule name, and the alternative approach taken
+- Do not attempt to bypass semantic constraints — restructure the code to comply
+- Document all constraint-driven restructuring decisions in the progress file

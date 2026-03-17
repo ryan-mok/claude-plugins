@@ -72,3 +72,21 @@ Some tasks require coordinated changes across multiple repositories. When the ta
 - If superpowers is not installed: the hooks still work, but the orchestration flow cannot invoke superpowers skills. Inform the user and suggest installing superpowers.
 - If atlassian plugin is not installed: skip Jira integration silently. Treat ticket IDs as text labels.
 - If code-simplifier is not installed: skip the simplify step after execution.
+
+## Analytics Awareness
+
+- After each completed implementation step, check `/harness-status` for anomalies (rising loop count, constraint violations)
+- If `outcome_agreement` has been `false` in recent sessions on this branch, increase self-verification rigor
+
+## Team Mode
+
+- When using agent teams, decompose work into tasks with explicit file ownership — no two tasks should modify the same file
+- After each task completion, review advisory signals via `/harness-status --team`
+- If a task had high `recent_loops_on_branch` or `recent_blocked_violations`, consider reopening it via the task list
+- Run the full test suite before accepting the team's collective output
+- Write `team_context: true` in progress file YAML frontmatter
+
+## Semantic Constraint Handling
+
+- When a semantic constraint blocks a write (`ok: false`), log it in the progress file's "Semantic Constraint Notes" section with timestamp, rule name, and the alternative approach taken
+- Do not attempt to bypass semantic constraints — restructure the code to comply
