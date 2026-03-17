@@ -109,14 +109,14 @@ Every event shares these fields:
 | `outcome_agreement` | Comparison | `agent_outcome == heuristic_outcome` |
 | `pr_created` | `gh pr list` (8s timeout, background) | Whether a PR exists for this branch |
 | `pr_check_timeout` | gh call timing | `true` if the gh call timed out (data incomplete) |
-| `tests_passing` | Loop state file — last test runner exit code | `true`, `false`, or `null` (no test runner detected) |
+| `tests_passing` | Loop state file — last test runner error fingerprint (see note below) | `true`, `false`, or `null` (no test runner detected) |
 | `unresolved_loops` | Loop state file point-in-time check | Count of detected loop patterns still present in last 10 entries at session end |
 | `constraint_violations_blocked` | `events.jsonl` count | `constraint.violation` events with `decision: "deny"` for this session |
 | `progress_marked_complete` | Progress file | Whether COMPLETE marker exists |
-| `duration_seconds` | `session.start.ts` for this session, or progress file creation time | Seconds from session start to end |
+| `duration_seconds` | Fallback chain: (1) `session.start.ts` for this session in `events.jsonl`, (2) progress file creation time via `stat`, (3) `null` if neither available | Seconds from session start to end |
 | `compaction_count` | `events.jsonl` count | `session.compact` events for this session |
 | `loop_count` | `events.jsonl` count | `loop.detected` events for this session |
-| `violation_count` | `events.jsonl` count | `constraint.violation` events for this session |
+| `total_violations` | `events.jsonl` count | All `constraint.violation` events for this session (block + warn). Distinct from `heuristic_signals.constraint_violations_blocked` which counts only `decision: "deny"` events. |
 | `semantic_blocks` | Progress file `## Semantic Constraint Notes` | Count of entries in that section |
 | `team_context` | `events.jsonl` query | `true` if any `team.*` events exist for this branch in last 24h |
 
@@ -135,6 +135,8 @@ partial: everything else
 ```
 
 Note: `tests_passing: null` (no test runner detected) does NOT trigger "failed". This prevents documentation-only sessions from being marked as failures.
+
+**`tests_passing` derivation:** The loop state file stores tool fingerprints with error text, not exit codes. To determine `tests_passing`: scan the loop state JSONL for the last entry where the tool is `Bash` and the command matches a test runner pattern (`test`, `jest`, `pytest`, `cargo test`, `go test`, `npm test`, `vitest`, `mocha`, `rspec`). If `is_error` is `true` for that entry → `tests_passing: false`. If `is_error` is `false` → `tests_passing: true`. If no test runner entry found → `tests_passing: null`.
 
 **`session.compact`** — Emitted by PreCompact hook.
 
@@ -291,6 +293,7 @@ Clean, fully-successful sessions don't get post-mortems.
 ### Storage
 
 **Location:** `.claude/harness/analytics/postmortems/{branch}--{session_id}.md`
+**Branch sanitization:** Slashes in branch names are replaced with hyphens (e.g., `feat/new-api` → `feat-new-api`), consistent with progress file naming convention.
 **Gitignored:** Yes (covered by `.claude/harness/analytics/` gitignore entry)
 **Retention:** 90 days, then removed by `/harness-cleanup --analytics`
 
@@ -424,12 +427,12 @@ Team context is determined at query time:
 
 ```bash
 # Is this session part of a team?
-jq -s '[.[] | select(.event | startswith("team.")) and .branch=="feat/new-api"
-  and .ts > "2026-03-16T14:00:00Z"] | length > 0' events.jsonl
+jq -s '[.[] | select((.event | startswith("team.")) and .branch=="feat/new-api"
+  and .ts > "2026-03-16T14:00:00Z")] | length > 0' events.jsonl
 
 # Team summary for a branch
 jq -s '
-  [.[] | select(.event | startswith("team.")) and .branch=="feat/new-api"] |
+  [.[] | select((.event | startswith("team.")) and .branch=="feat/new-api")] |
   {
     tasks_completed: [.[] | select(.event=="team.task_completed")] | length,
     agents_idle: [.[] | select(.event=="team.agent_idle")] | length,
@@ -455,6 +458,15 @@ These assumptions need verification during implementation:
 ---
 
 ## 5. Semantic Constraints
+
+### Hook type clarification
+
+The v1 spec referenced "prompt hooks" (`type: "prompt"`) as a future option for semantic constraints. v2 uses `type: "agent"` hooks instead. These are distinct Claude Code hook types:
+
+- **`type: "prompt"`** — Single-turn LLM evaluation. The model receives the prompt + hook input and returns `{ok, reason}`. Cannot read files.
+- **`type: "agent"`** — Multi-turn subagent with tool access (Read, Grep, Glob, WebFetch). Up to 50 turns. Returns `{ok, reason}`.
+
+v2 requires `type: "agent"` because semantic constraints need to Read `constraints.json` dynamically, and cross-file constraints need to Read/Glob context files. `type: "prompt"` cannot do this (no tool access). Both types use a `prompt` field in the hook configuration and the same `{ok, reason}` response format.
 
 ### Constraint types (v1 + v2)
 
@@ -571,7 +583,7 @@ Session: 7fb1d778 | Branch: feat/new-api | Mode: harness-auto
 Duration: 32m | Compactions: 1 | Team context: no
 
 ### Guardrail Activity (this session)
-Loops detected: 2 (1 recovered, 1 unresolved)
+Loops detected: 2 (1 resolved, 1 unresolved)
 Constraint violations: 3 (2 warn, 1 block)
 
 ### Session History (last 30 days)
@@ -591,6 +603,8 @@ Highest disagreement: harness-auto mode (3/8 disagree)
 ```
 
 **Note:** "Semantic evaluations" are NOT shown in the live session view. They lack real-time JSONL events and only appear in post-mortems and session history (derived from `session.end`).
+
+**Loop resolution detection (live):** The status command determines "resolved" vs "unresolved" loops by reading the current loop state file (`/tmp/harness-loop-state-{SESSION}.jsonl`). For each `loop.detected` event's (tool, file) pattern, check if that pattern is still present in the last 10 entries. If cleared → resolved. If still present → unresolved. This is the same logic the Stop hook uses for `session.end.unresolved_loops`.
 
 ### Flags
 
@@ -726,7 +740,7 @@ Same additions as 7b, with autonomous decision-making:
 - Constraint violation data now lives in `events.jsonl` (managed by `--analytics`)
 - Flag prints: "Constraint logs are now in analytics. Use --analytics to manage."
 
-**`--all` updated:** Now includes analytics cleanup.
+**`--all` updated:** Now includes analytics cleanup. The existing behavior of "no flags = clean everything" is preserved, and now "everything" includes analytics.
 
 ### 7f. Harness command updates (/harness, /harness-auto)
 
@@ -856,7 +870,7 @@ The plugin's `hooks.json` with all v2 additions:
 | `hooks/scripts/progress-load.sh` | Emit `session.start` event |
 | `hooks/scripts/progress-save.sh` | Emit `session.compact`, compute and emit `session.end`, generate post-mortems |
 | `hooks/scripts/loop-detect.sh` | Emit `loop.detected` event |
-| `hooks/scripts/constraint-check.sh` | Emit `constraint.violation` to `events.jsonl`, remove `/tmp` log |
+| `hooks/scripts/constraint-check.sh` | Switch from `$CWD` to `get_git_root()` for path resolution (worktree fix), emit `constraint.violation` to `events.jsonl`, remove `/tmp` log |
 | `hooks/scripts/lib.sh` | Add analytics helpers (emit_event, get_analytics_dir) |
 | `skills/harness-orchestration/SKILL.md` | Analytics awareness, team mode, semantic constraint sections |
 | `skills/harness-orchestration-auto/SKILL.md` | Same additions with autonomous overrides |
@@ -900,7 +914,7 @@ jq -s '
 
 # Team summary for a branch
 jq -s '
-  [.[] | select(.event | startswith("team.")) and .branch=="feat/new-api"]
+  [.[] | select((.event | startswith("team.")) and .branch=="feat/new-api")]
   | {
       tasks: [.[] | select(.event=="team.task_completed")] | length,
       with_signals: [.[] | select(.event=="team.task_completed")
@@ -925,4 +939,6 @@ jq -s '
 | `/tmp/harness-constraint-log-*.jsonl` | `events.jsonl` (`constraint.violation` events) | Automatic — v2 hooks write to new location |
 | `/harness-cleanup --constraints` | `/harness-cleanup --analytics` | Flag deprecated with message |
 | `/harness-status` constraint queries | Reads `events.jsonl` instead of `/tmp` | Automatic — v2 status command updated |
-| Progress file format | Gains YAML frontmatter, new sections | Backward compatible — new sections are optional, Stop hook defaults to `"unknown"` for missing data |
+| Progress file format | Gains YAML frontmatter, new sections | Backward compatible — new sections are optional, Stop hook defaults to `"unknown"` for missing data. Fallback-generated progress files (from git) do NOT include YAML frontmatter; the Stop hook treats missing frontmatter as `mode: "unknown"`, `team_context: false`. |
+| v1 "prompt hooks" for semantic constraints | v2 uses `type: "agent"` hooks | Agent hooks were chosen over prompt hooks because semantic constraints require Read access to `constraints.json` and cross-file constraints require Glob/Read for context files. See Section 5 "Hook type clarification". |
+| v1 `custom-semantic` constraint type | v2 uses `semantic` and `cross-file` types | Split into two types for clarity: `semantic` (single-file LLM evaluation) and `cross-file` (multi-file subagent verification). |
