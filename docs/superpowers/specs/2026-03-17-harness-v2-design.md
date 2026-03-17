@@ -136,7 +136,7 @@ partial: everything else
 
 Note: `tests_passing: null` (no test runner detected) does NOT trigger "failed". This prevents documentation-only sessions from being marked as failures.
 
-**`tests_passing` derivation:** The loop state file stores tool fingerprints with error text, not exit codes. To determine `tests_passing`: scan the loop state JSONL for the last entry where the tool is `Bash` and the command matches a test runner pattern (`test`, `jest`, `pytest`, `cargo test`, `go test`, `npm test`, `vitest`, `mocha`, `rspec`). If `is_error` is `true` for that entry → `tests_passing: false`. If `is_error` is `false` → `tests_passing: true`. If no test runner entry found → `tests_passing: null`.
+**`tests_passing` derivation:** The loop state file stores fingerprints as `{"tool": "...", "file": "...", "error": "...", "ts": "..."}`. The `file` field contains the command string for Bash tool calls. The `error` field is a non-empty string when the tool result contains error patterns, or empty when successful. To determine `tests_passing`: scan the loop state JSONL for the last entry where `tool == "Bash"` and the `file` field matches a test runner pattern (`test`, `jest`, `pytest`, `cargo test`, `go test`, `npm test`, `vitest`, `mocha`, `rspec`). If the `error` field is non-empty → `tests_passing: false`. If empty → `tests_passing: true`. If no matching entry found → `tests_passing: null`.
 
 **`session.compact`** — Emitted by PreCompact hook.
 
@@ -306,7 +306,7 @@ Clean, fully-successful sessions don't get post-mortems.
 **Date:** 2026-03-17T14:30:00Z
 **Duration:** 30m 47s
 **Mode:** harness-auto
-**Outcome:** agent=success, heuristic=partial (DISAGREEMENT)
+**Outcome:** agent=success, heuristic=failed (DISAGREEMENT)
 
 ## Timeline
 - 14:30:00 — Session started (fresh)
@@ -330,14 +330,14 @@ Clean, fully-successful sessions don't get post-mortems.
 
 ## Outcome Analysis
 **Agent said:** success (progress marked COMPLETE)
-**Heuristic said:** partial
-**Disagreement reason:** tests_passing=false, unresolved_loops=1
+**Heuristic said:** failed
+**Disagreement reason:** tests_passing=false, constraint_violations_blocked=1
 
 ## Signals
 - PR created: yes
 - Tests passing: no
 - Unresolved loops: 1
-- Blocked violations: 0 (resolved)
+- Blocked violations: 1
 - Progress marked complete: yes
 - Compactions: 2
 - Semantic blocks: 0
@@ -453,7 +453,7 @@ These assumptions need verification during implementation:
 | TaskCompleted hook input schema | Contains `task_id` and task metadata | Test with a sample team session or check Claude Code docs |
 | TeammateIdle hook input schema | Contains agent identifier | Same |
 | Hook execution context | Team hooks run with access to main repo's `events.jsonl` | Test — affects path resolution |
-| TaskCompleted exit code 2 | Blocks task completion and sends feedback | Verify in Claude Code docs |
+| TaskCompleted exit code 2 behavior | If exit code 2 blocks completion and sends feedback, this could enable future upgrade from analytics-only to gating hooks. Current design uses exit 0 only. | Verify in Claude Code docs for future consideration |
 
 ---
 
@@ -480,7 +480,7 @@ v2 requires `type: "agent"` because semantic constraints need to Read `constrain
 
 ### Why block only for semantic/cross-file
 
-Agent hooks return `{ok: true}` or `{ok: false, reason: "..."}`. This is binary — block or allow. There is no mechanism to inject an advisory warning while allowing the action to proceed. The `command` hook type supports this via `permissionDecision: "allow"` + `additionalContext`, but agent hooks do not.
+Agent hooks return `{ok: true}` or `{ok: false, reason: "..."}`. This is binary — block or allow. There is no mechanism to inject an advisory warning while allowing the action to proceed. The `command` hook type supports this via `permissionDecision: "allow"` + `systemMessage`, but agent hooks do not.
 
 ### Zero overhead by default
 
@@ -520,7 +520,7 @@ Added to `.claude/settings.json` by the constraint-setup skill:
         "hooks": [
           {
             "type": "agent",
-            "prompt": "PRIORITY: Exit early if possible.\n\nStep 1: Extract the file_path from the tool input below.\nStep 2: Read .claude/harness/constraints.json. If it does not exist, immediately return {\"ok\": true}.\nStep 3: Find rules with type 'semantic' or 'cross-file' AND severity 'block'. If none exist, immediately return {\"ok\": true}.\nStep 4: Check if file_path matches any matching rule's 'in' glob. If no glob matches, immediately return {\"ok\": true}.\nStep 5: For matching 'semantic' rules — if this is an Edit operation, Read the full target file for context. Evaluate whether the PROPOSED CHANGE introduces a violation per the rule's 'description' and 'prompt' fields. Do not flag pre-existing violations in unchanged code.\nStep 6: For matching 'cross-file' rules — use Glob to find files matching 'context_files' patterns, Read relevant matches, and verify the constraint described in the 'verify' field.\nStep 7: If any block-severity rule is violated, return {\"ok\": false, \"reason\": \"Rule [name]: [description]\"}. Otherwise return {\"ok\": true}.\n\nTool input: $ARGUMENTS",
+            "prompt": "PRIORITY: Exit early if possible.\n\nStep 1: Extract the file_path from the tool input below.\nStep 2: Read .claude/harness/constraints.json. If it does not exist, immediately return {\"ok\": true}.\nStep 3: Find rules with type 'semantic' or 'cross-file' AND severity 'block'. If none exist, immediately return {\"ok\": true}.\nStep 4: Check if file_path matches any matching rule's 'check.in' glob. If no glob matches, immediately return {\"ok\": true}.\nStep 5: For matching 'semantic' rules — if this is an Edit operation, Read the full target file for context. Evaluate whether the PROPOSED CHANGE introduces a violation per the rule's 'description' and 'check.prompt' fields. Do not flag pre-existing violations in unchanged code.\nStep 6: For matching 'cross-file' rules — use Glob to find files matching 'context_files' patterns, Read relevant matches, and verify the constraint described in the 'verify' field.\nStep 7: If any block-severity rule is violated, return {\"ok\": false, \"reason\": \"Rule [name]: [description]\"}. Otherwise return {\"ok\": true}.\n\nTool input: $ARGUMENTS",
             "timeout": 60
           }
         ]
