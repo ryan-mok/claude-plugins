@@ -1,6 +1,6 @@
 ---
 description: Show harness v2 dashboard (session, guardrails, analytics, trends)
-argument-hint: [--progress | --reset-loops | --analytics | --trends | --postmortem [session_id] | --team]
+argument-hint: [--progress | --reset-loops | --constraints | --analytics | --trends | --postmortem [session_id] | --team]
 allowed-tools: Read, Bash(cat:*,ls:*,wc:*,jq:*,head:*,find:*,rm:*,tail:*,grep:*,sort:*,uniq:*,awk:*,date:*,stat:*)
 ---
 
@@ -143,6 +143,14 @@ If `$ARGUMENTS` contains `--analytics`, display all events for the current sessi
 
 ```bash
 jq -c --arg sid "SESSION_ID" 'select(.session_id == $sid)' .claude/harness/analytics/events.jsonl
+```
+
+### `--constraints`
+
+If `$ARGUMENTS` contains `--constraints`, display all loaded constraint rules from `.claude/harness/constraints.json`:
+
+```bash
+jq '.rules[] | {name, type, severity, description}' .claude/harness/constraints.json 2>/dev/null || echo "No constraints file found."
 ```
 
 ### `--trends`

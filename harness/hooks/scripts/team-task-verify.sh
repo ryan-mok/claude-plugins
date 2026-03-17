@@ -20,15 +20,20 @@ RECENT_WARN=0
 RECENT_LOOPS=0
 
 if [[ -f "$EVENTS_FILE" ]]; then
-  LAST_TC_TS=$(jq -s -r --arg branch "$BRANCH" \
-      '[.[] | select(.event=="team.task_completed" and .branch==$branch)] | sort_by(.ts) | last | .ts // "1970-01-01T00:00:00Z"' "$EVENTS_FILE" 2>/dev/null)
+    signals=$(jq -s --arg branch "$BRANCH" '
+      ([.[] | select(.event=="team.task_completed" and .branch==$branch)] | sort_by(.ts) | last | .ts // "1970-01-01T00:00:00Z") as $since |
+      {
+        recent_blocked: [.[] | select(.event=="constraint.violation" and .branch==$branch and .decision=="deny" and .ts > $since)] | length,
+        recent_warn: [.[] | select(.event=="constraint.violation" and .branch==$branch and .decision=="allow" and .ts > $since)] | length,
+        recent_loops: [.[] | select(.event=="loop.detected" and .branch==$branch and .ts > $since)] | length
+      }
+    ' "$EVENTS_FILE" 2>/dev/null)
 
-  RECENT_BLOCKED=$(jq -r --arg branch "$BRANCH" --arg since "$LAST_TC_TS" \
-      'select(.event=="constraint.violation" and .branch==$branch and .decision=="deny" and .ts > $since)' "$EVENTS_FILE" 2>/dev/null | wc -l | tr -d ' ')
-  RECENT_WARN=$(jq -r --arg branch "$BRANCH" --arg since "$LAST_TC_TS" \
-      'select(.event=="constraint.violation" and .branch==$branch and .decision=="allow" and .ts > $since)' "$EVENTS_FILE" 2>/dev/null | wc -l | tr -d ' ')
-  RECENT_LOOPS=$(jq -r --arg branch "$BRANCH" --arg since "$LAST_TC_TS" \
-      'select(.event=="loop.detected" and .branch==$branch and .ts > $since)' "$EVENTS_FILE" 2>/dev/null | wc -l | tr -d ' ')
+    if [[ -n "$signals" ]]; then
+        RECENT_BLOCKED=$(echo "$signals" | jq -r '.recent_blocked')
+        RECENT_WARN=$(echo "$signals" | jq -r '.recent_warn')
+        RECENT_LOOPS=$(echo "$signals" | jq -r '.recent_loops')
+    fi
 fi
 
 emit_event "team.task_completed" "$(jq -n -c \

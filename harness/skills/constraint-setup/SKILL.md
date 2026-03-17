@@ -68,16 +68,18 @@ Enforces higher-level code quality rules that require understanding context beyo
 {
   "name": "no-business-logic-in-controllers",
   "type": "semantic",
-  "description": "Controllers must delegate to service layer — no inline business logic, database queries, or complex transformations",
-  "deny": {
-    "in": "src/controllers/**"
+  "description": "Controller files should only handle HTTP request/response. Business logic belongs in the service layer.",
+  "check": {
+    "in": "src/controllers/**",
+    "prompt": "Does this code contain business logic (data transformation, validation rules, complex conditionals, database queries) rather than just HTTP request handling and delegation to services?"
   },
   "severity": "block"
 }
 ```
 
-- `in`: glob pattern matching file paths to check
-- The agent hook evaluates the file content against the rule description using LLM reasoning
+- `check.in`: glob pattern matching file paths to check
+- `check.prompt`: question the agent hook evaluates against the file content
+- The agent hook evaluates the file content against the rule description and prompt using LLM reasoning
 - Semantic rules only support `block` severity (see Severity Levels below)
 
 ### cross-file
@@ -86,19 +88,21 @@ Enforces invariants that span multiple files — for example, ensuring that ever
 
 ```json
 {
-  "name": "api-routes-need-tests",
+  "name": "api-endpoints-must-have-tests",
   "type": "cross-file",
-  "description": "Every API route file must have a corresponding test file",
-  "deny": {
-    "in": "src/routes/**/*.ts",
-    "requires": "tests/routes/**/*.test.ts"
+  "description": "Every exported function in src/api/ must have a corresponding test in tests/api/",
+  "check": {
+    "in": "src/api/**",
+    "verify": "Check if the function being added or modified has a corresponding test file in tests/api/ with at least one test case for this function.",
+    "context_files": ["tests/api/**"]
   },
   "severity": "block"
 }
 ```
 
-- `in`: glob pattern matching the source files being checked
-- `requires`: glob pattern that must have a corresponding match for each source file
+- `check.in`: glob pattern matching the source files being checked
+- `check.verify`: instruction the agent hook follows to verify the cross-file invariant
+- `check.context_files`: glob patterns the agent hook reads to verify the constraint
 - Cross-file rules only support `block` severity (see Severity Levels below)
 
 ## Severity Levels
@@ -144,7 +148,7 @@ Semantic and cross-file rules require an agent hook to evaluate writes. The agen
 ```json
 {
   "type": "agent",
-  "prompt": "You are a semantic constraint checker. For each file write, evaluate whether it violates any semantic or cross-file rules in .claude/harness/constraints.json. Decision tree: 1) Read the constraint rules. 2) For semantic rules: does the new file content violate the rule's description for files matching the glob? 3) For cross-file rules: does a corresponding file exist matching the 'requires' pattern? 4) If any rule is violated, respond with ok: false and explain which rule and why. 5) If no rules are violated, respond with ok: true.",
+  "prompt": "PRIORITY: Exit early if possible.\n\nStep 1: Extract the file_path from the tool input below.\nStep 2: Read .claude/harness/constraints.json. If it does not exist, immediately return {\"ok\": true}.\nStep 3: Find rules with type 'semantic' or 'cross-file' AND severity 'block'. If none exist, immediately return {\"ok\": true}.\nStep 4: Check if file_path matches any matching rule's 'check.in' glob. If no glob matches, immediately return {\"ok\": true}.\nStep 5: For matching 'semantic' rules — if this is an Edit operation, Read the full target file for context. Evaluate whether the PROPOSED CHANGE introduces a violation per the rule's 'description' and 'check.prompt' fields. Do not flag pre-existing violations in unchanged code.\nStep 6: For matching 'cross-file' rules — use Glob to find files matching 'context_files' patterns, Read relevant matches, and verify the constraint described in the 'verify' field.\nStep 7: If any block-severity rule is violated, return {\"ok\": false, \"reason\": \"Rule [name]: [description]\"}. Otherwise return {\"ok\": true}.\n\nTool input: $ARGUMENTS",
   "timeout": 60
 }
 ```

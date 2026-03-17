@@ -279,7 +279,7 @@ generate_postmortem() {
     [ "$outcome_agreement" = "false" ] && dominated=true
     [ "$loop_count" -gt 0 ] 2>/dev/null && dominated=true
     [ "$constraint_violations_blocked" -gt 0 ] 2>/dev/null && dominated=true
-    if [ "$heuristic_outcome" = "failed" ] || [ "$heuristic_outcome" = "partial" ]; then
+    if [ "$heuristic_outcome" = "failed" ]; then
         dominated=true
     fi
     [ "$compaction_count" -ge 3 ] 2>/dev/null && dominated=true
@@ -571,7 +571,7 @@ if [[ "$EVENT" == "PreCompact" && -d "$PROGRESS_DIR" ]]; then
     EVENTS_FILE="$(get_analytics_dir "$CWD")/events.jsonl"
     COMPACT_COUNT=1
     if [[ -f "$EVENTS_FILE" ]]; then
-        COMPACT_COUNT=$(( $(jq -r --arg sid "$SESSION_PREFIX" 'select(.event=="session.compact" and .session_id==$sid)' "$EVENTS_FILE" 2>/dev/null | wc -l | tr -d ' ') + 1 ))
+        COMPACT_COUNT=$(( $(jq -rc --arg sid "$SESSION_PREFIX" 'select(.event=="session.compact" and .session_id==$sid)' "$EVENTS_FILE" 2>/dev/null | wc -l | tr -d ' ') + 1 ))
     fi
     emit_event "session.compact" "{\"compaction_count\":$COMPACT_COUNT}"
 fi
