@@ -32,7 +32,7 @@ compute_session_end() {
 
     # --- 2. Read progress file ---
     local agent_outcome="unknown"
-    local mode="organic"
+    local mode="unknown"
     local semantic_blocks=0
     local progress_marked_complete="false"
 
@@ -50,7 +50,7 @@ compute_session_end() {
 
         # mode: from YAML frontmatter
         local yaml_mode
-        yaml_mode=$(sed -n '/^---$/,/^---$/{ s/^mode: *//p; }' "$progress_file" 2>/dev/null)
+        yaml_mode=$(sed -n '/^---$/,/^---$/{ s/^mode: *//p; }' "$progress_file" 2>/dev/null | head -1 | tr -d '[:space:]')
         if [ -n "$yaml_mode" ]; then
             mode="$yaml_mode"
         fi

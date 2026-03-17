@@ -28,7 +28,7 @@ Archive analytics events older than 90 days:
 4. Rewrite `events.jsonl` with only the recent events
 
 ```bash
-CUTOFF=$(date -v-90d +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -d '90 days ago' +%Y-%m-%dT%H:%M:%S)
+CUTOFF=$(date -u -v-90d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '90 days ago' +%Y-%m-%dT%H:%M:%SZ)
 
 # Archive old events (append to archive file)
 jq -c --arg cutoff "$CUTOFF" 'select(.ts < $cutoff)' .claude/harness/analytics/events.jsonl >> .claude/harness/analytics/events.archived.jsonl
