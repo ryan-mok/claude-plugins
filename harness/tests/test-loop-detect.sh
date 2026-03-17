@@ -107,13 +107,25 @@ fi
 echo ""
 echo "Test 7: same-target loop emits loop.detected event"
 rm -f "${STATE_PREFIX}.jsonl"
-ANALYTICS_DIR="/tmp/test-project/.claude/harness/analytics"
-rm -rf "$ANALYTICS_DIR"
+TEST7_DIR=$(mktemp -d)
+TEST7_DIR=$(cd "$TEST7_DIR" && pwd -P)
+cleanup_test7() { rm -rf "$TEST7_DIR"; }
+trap cleanup_test7 EXIT
+(
+    cd "$TEST7_DIR"
+    git init -q
+    git commit --allow-empty -m "init" -q
+    mkdir -p .claude/harness/progress
+    echo "# Progress" > ".claude/harness/progress/$(git rev-parse --abbrev-ref HEAD)--test1234.md"
+)
+TEST7_ANALYTICS="$TEST7_DIR/.claude/harness/analytics"
 for i in 1 2 3 4; do
-    cat "$FIXTURES/post-tool-use-edit.json" | bash "$HOOK_SCRIPT" > /dev/null 2>&1 || true
+    jq --arg cwd "$TEST7_DIR" --arg fp "$TEST7_DIR/src/handler.ts" \
+        '.cwd = $cwd | .tool_input.file_path = $fp' \
+        "$FIXTURES/post-tool-use-edit.json" | bash "$HOOK_SCRIPT" > /dev/null 2>&1 || true
 done
-if [ -f "$ANALYTICS_DIR/events.jsonl" ]; then
-    EVENT=$(jq -r 'select(.event == "loop.detected") | .pattern' "$ANALYTICS_DIR/events.jsonl" 2>/dev/null | head -1)
+if [ -f "$TEST7_ANALYTICS/events.jsonl" ]; then
+    EVENT=$(jq -r 'select(.event == "loop.detected") | .pattern' "$TEST7_ANALYTICS/events.jsonl" 2>/dev/null | head -1)
     if [ "$EVENT" = "same-target" ]; then
         echo "  PASS: loop.detected event with pattern=same-target"
         ((PASS++)) || true
@@ -125,7 +137,8 @@ else
     echo "  FAIL: events.jsonl not created"
     ((FAIL++)) || true
 fi
-rm -rf "$ANALYTICS_DIR"
+rm -rf "$TEST7_DIR"
+trap - EXIT
 
 # Cleanup
 rm -f "${STATE_PREFIX}.jsonl"

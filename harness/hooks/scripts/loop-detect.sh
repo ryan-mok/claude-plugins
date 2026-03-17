@@ -111,7 +111,7 @@ if [ "$TOOL_NAME" = "Bash" ] && [ -n "$ERROR_FP" ]; then
         ' 2>/dev/null || echo "0")
         if [ "$CYCLE_COUNT" -ge 3 ]; then
             BRANCH=$(git -C "$CWD" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
-            emit_event "loop.detected" "$(jq -n -c --arg p "edit-test-fail" --arg f "$FILE_PATH" --argjson c "$CYCLE_COUNT" '{pattern:$p,file:$f,count:$c}')"
+            emit_event "loop.detected" "$(jq -n -c --arg p "edit-test-fail" --arg t "Edit" --arg f "$FILE_PATH" --argjson c "$CYCLE_COUNT" '{pattern:$p,tool:$t,file:$f,count:$c}')"
             MSG="LOOP DETECTED: Edit-test-fail cycle detected $CYCLE_COUNT times. STOP. The same fix approach is not working. Use the harness:loop-recovery skill to try a fundamentally different approach."
             ESCAPED_MSG=$(escape_for_json "$MSG")
             cat <<EOF

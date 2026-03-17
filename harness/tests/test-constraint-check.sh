@@ -183,10 +183,10 @@ echo ""
 echo "Test 8: Event contains rule, file, severity, decision fields"
 if [ -f "$EVENTS_FILE" ]; then
     EVENT_LINE=$(grep '"constraint.violation"' "$EVENTS_FILE" | tail -1)
-    HAS_RULE=$(echo "$EVENT_LINE" | jq -e '.rule == "no-env-in-source"' 2>/dev/null)
-    HAS_FILE=$(echo "$EVENT_LINE" | jq -e '.file == "src/api/handler.ts"' 2>/dev/null)
-    HAS_SEVERITY=$(echo "$EVENT_LINE" | jq -e '.severity == "warn"' 2>/dev/null)
-    HAS_DECISION=$(echo "$EVENT_LINE" | jq -e '.decision == "allow"' 2>/dev/null)
+    HAS_RULE=$(echo "$EVENT_LINE" | jq -e '.rule == "no-env-in-source"' 2>/dev/null || echo "false")
+    HAS_FILE=$(echo "$EVENT_LINE" | jq -e '.file == "src/api/handler.ts"' 2>/dev/null || echo "false")
+    HAS_SEVERITY=$(echo "$EVENT_LINE" | jq -e '.severity == "warn"' 2>/dev/null || echo "false")
+    HAS_DECISION=$(echo "$EVENT_LINE" | jq -e '.decision == "allow"' 2>/dev/null || echo "false")
     if [ "$HAS_RULE" = "true" ] && [ "$HAS_FILE" = "true" ] && [ "$HAS_SEVERITY" = "true" ] && [ "$HAS_DECISION" = "true" ]; then
         echo "  PASS: event contains rule, file, severity, decision"
         ((PASS++)) || true

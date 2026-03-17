@@ -20,7 +20,7 @@ compute_session_end() {
     trap 'rm -f "$gh_result_file"' RETURN
     if command -v gh >/dev/null 2>&1; then
         # Use background-and-kill instead of `timeout` (not available on stock macOS)
-        gh pr list --head "$BRANCH" --state open --limit 1 --json number > "$gh_result_file" 2>/dev/null &
+        gh -C "$CWD" pr list --head "$BRANCH" --state open --limit 1 --json number > "$gh_result_file" 2>/dev/null &
         gh_pid=$!
         # Kill after 8 seconds if still running
         ( sleep 8; kill "$gh_pid" 2>/dev/null && echo "TIMEOUT" > "$gh_result_file" ) &
@@ -325,23 +325,23 @@ generate_postmortem() {
 
     # --- Build the timeline from events.jsonl ---
     local timeline
-    timeline=$(jq -r --arg sid "$SESSION_PREFIX" \
-        'select(.session_id==$sid) | "| \(.ts) | \(.event) | \(.scope // "-") |"' \
+    timeline=$(jq -s -r --arg sid "$SESSION_PREFIX" \
+        '[.[] | select(.session_id==$sid)] | sort_by(.ts) | .[] | "| \(.ts) | \(.event) | \(.scope // "-") |"' \
         "$events_file" 2>/dev/null)
 
     # --- Build loops table ---
     local loops_table=""
     if [ "$loop_count" -gt 0 ] 2>/dev/null; then
-        loops_table=$(jq -r --arg sid "$SESSION_PREFIX" \
-            'select(.event=="loop.detected" and .session_id==$sid) | "| \(.ts) | \(.tool // "-") | \(.file // "-") | \(.count // "-") |"' \
+        loops_table=$(jq -s -r --arg sid "$SESSION_PREFIX" \
+            '[.[] | select(.event=="loop.detected" and .session_id==$sid)] | sort_by(.ts) | .[] | "| \(.ts) | \(.tool // "-") | \(.file // "-") | \(.count // "-") |"' \
             "$events_file" 2>/dev/null)
     fi
 
     # --- Build constraint violations table ---
     local violations_table=""
     if [ "$total_violations" -gt 0 ] 2>/dev/null; then
-        violations_table=$(jq -r --arg sid "$SESSION_PREFIX" \
-            'select(.event=="constraint.violation" and .session_id==$sid) | "| \(.ts) | \(.rule // "-") | \(.severity // "-") | \(.decision // "-") |"' \
+        violations_table=$(jq -s -r --arg sid "$SESSION_PREFIX" \
+            '[.[] | select(.event=="constraint.violation" and .session_id==$sid)] | sort_by(.ts) | .[] | "| \(.ts) | \(.rule // "-") | \(.severity // "-") | \(.decision // "-") |"' \
             "$events_file" 2>/dev/null)
     fi
 
