@@ -57,3 +57,73 @@ get_field() {
     local field="$2"
     echo "$input" | jq -r "$field // \"\""
 }
+
+# Return the analytics directory path under the main repo root.
+# Usage: ANALYTICS_DIR=$(get_analytics_dir "$CWD")
+get_analytics_dir() {
+    local cwd="${1:-$CWD}"
+    local root
+    root=$(get_git_root "$cwd")
+    echo "$root/.claude/harness/analytics"
+}
+
+# Return true (exit 0) if running in a git worktree, false (exit 1) otherwise.
+# Compares git show-toplevel with the main repo root from get_git_root.
+# Usage: if is_worktree "$CWD"; then ...
+is_worktree() {
+    local cwd="${1:-$CWD}"
+    local toplevel
+    toplevel=$(cd "$cwd" && git rev-parse --show-toplevel 2>/dev/null) || return 1
+    # Resolve symlinks for consistent comparison
+    if [ -d "$toplevel" ]; then
+        toplevel=$(cd "$toplevel" && pwd -P)
+    fi
+    local root
+    root=$(get_git_root "$cwd")
+    [ "$toplevel" != "$root" ]
+}
+
+# Append an analytics event to events.jsonl.
+# Requires CWD, SESSION_PREFIX, BRANCH to be set by caller.
+# Usage: emit_event "session.start" '{"extra":"data"}' "single"
+emit_event() {
+    local event_type="$1"
+    local extra_fields="${2:-"{}"}"
+    local scope="${3:-single}"
+
+    # Cache git root — called once instead of 3 times
+    local git_root
+    git_root=$(get_git_root "$CWD")
+    local analytics_dir="$git_root/.claude/harness/analytics"
+    mkdir -p "$analytics_dir"
+
+    local ts repo_root worktree_val
+    ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    repo_root="$git_root"
+
+    # Inline worktree check using cached git_root (resolve symlinks for macOS /var -> /private/var)
+    local toplevel
+    toplevel=$(cd "$CWD" && git rev-parse --show-toplevel 2>/dev/null || echo "")
+    [[ -n "$toplevel" && -d "$toplevel" ]] && toplevel=$(cd "$toplevel" && pwd -P)
+    if [[ -n "$toplevel" && "$toplevel" != "$git_root" ]]; then
+        worktree_val="true"
+    else
+        worktree_val="false"
+    fi
+
+    # Single jq call for envelope + merge
+    local merged
+    merged=$(jq -n -c \
+        --arg ts "$ts" \
+        --arg event "$event_type" \
+        --arg sid "${SESSION_PREFIX:-unknown}" \
+        --arg branch "${BRANCH:-unknown}" \
+        --arg scope "$scope" \
+        --arg repo "$repo_root" \
+        --argjson wt "$worktree_val" \
+        --argjson extra "$extra_fields" \
+        '{ts:$ts, event:$event, session_id:$sid, branch:$branch, scope:$scope, worktree:$wt, repo_root:$repo} + $extra'
+    )
+
+    echo "$merged" >> "$analytics_dir/events.jsonl"
+}

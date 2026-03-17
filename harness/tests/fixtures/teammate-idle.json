@@ -1,0 +1,5 @@
+{
+  "session_id": "test1234-abcd-efgh-ijkl",
+  "cwd": "/tmp/test-project",
+  "hook_event_name": "TeammateIdle"
+}

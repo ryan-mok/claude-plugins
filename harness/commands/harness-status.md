@@ -1,56 +1,228 @@
 ---
-description: Show harness status (loop detection, progress, constraints)
-argument-hint: [--progress | --constraints | --reset-loops]
-allowed-tools: Read, Bash(cat:*,ls:*,wc:*,jq:*,head:*,find:*,rm:*)
+description: Show harness v2 dashboard (session, guardrails, analytics, trends)
+argument-hint: [--progress | --reset-loops | --constraints | --analytics | --trends | --postmortem [session_id] | --team]
+allowed-tools: Read, Bash(cat:*,ls:*,wc:*,jq:*,head:*,find:*,rm:*,tail:*,grep:*,sort:*,uniq:*,awk:*,date:*,stat:*)
 ---
 
-Assemble and display the current harness status by reading state files. Check if `jq` is available on the system PATH first — if not, warn the user that harness hooks require jq.
+Assemble and display the current harness status dashboard by reading state and analytics files. Check if `jq` is available on the system PATH first — if not, warn the user that harness hooks require jq.
 
 Flag: $ARGUMENTS
 
-## Loop Detection
+---
 
-Find the loop detection state file at `/tmp/harness-loop-state-*.jsonl` for the current project. Report:
-- How many tool calls are tracked (line count of the JSONL file)
-- How many loops were detected this session (count entries where the hook output a systemMessage — these are logged in the transcript, so just count JSONL entries and report the state file path)
+## Section 1: Current Session
 
-If `$ARGUMENTS` contains `--reset-loops`, delete the loop state file and confirm reset.
+Read the current session's progress file from `.claude/harness/progress/` and its YAML frontmatter. Report:
 
-## Progress
+- **Session ID** — the session prefix from the filename
+- **Branch** — from the progress file or `git branch --show-current`
+- **Mode** — from the `mode:` field in the progress YAML frontmatter (`harness`, `harness-auto`, `organic`)
+- **Duration** — elapsed time since the session started
+- **Compactions** — count of `session.compact` events from `.claude/harness/analytics/events.jsonl` for this session
+- **Team context** — if `team_context: true` in the progress frontmatter
 
-Read `.claude/harness/progress/_index.md` if it exists. Report:
-- Last saved timestamp
-- Current branch
-- Number of active sessions
-- List each session with staleness indication
+Example jq query for compactions:
+```bash
+jq -c 'select(.event == "session.compact" and .session_id == "SESSION_ID")' .claude/harness/analytics/events.jsonl | wc -l
+```
 
 If `$ARGUMENTS` contains `--progress`, also read and display the full contents of the current session's progress file.
 
-## Constraints
+---
 
-If `.claude/harness/constraints.json` exists, report how many rules are loaded. Check `/tmp/harness-constraint-log-*.jsonl` for violation history this session.
+## Section 2: Guardrail Activity
 
-If `$ARGUMENTS` contains `--constraints`, display all rules from the constraints file.
+### Loop Detection
+
+Find the loop detection state file at `/tmp/harness-loop-state-*.jsonl` for the current session. Also query `loop.detected` events from `.claude/harness/analytics/events.jsonl` for the current session.
+
+**Loop resolution detection:** For each `loop.detected` event, extract its `(tool, file)` pattern. Then check whether that pattern is still present in the last 10 entries of `/tmp/harness-loop-state-{SESSION}.jsonl`. If the pattern has been cleared, mark it **resolved**. If still present, mark it **unresolved**.
+
+Example jq queries:
+```bash
+# Get loop events for current session
+jq -c 'select(.event == "loop.detected" and .session_id == "SESSION_ID")' .claude/harness/analytics/events.jsonl
+
+# Get last 10 entries from loop state file
+tail -10 /tmp/harness-loop-state-SESSION.jsonl | jq -s '.'
+```
+
+Report:
+- Loops detected: N (M resolved, K unresolved)
+
+### Constraint Violations
+
+Query `constraint.violation` events from `.claude/harness/analytics/events.jsonl` for the current session.
+
+Example jq query:
+```bash
+jq -s --arg sid "SESSION_ID" '[.[] | select(.event == "constraint.violation" and .session_id == $sid)] | group_by(.decision) | map({decision: .[0].decision, count: length})' .claude/harness/analytics/events.jsonl
+```
+
+Report:
+- Constraint violations: N warnings (decision="allow"), M blocks (decision="deny")
+
+If `$ARGUMENTS` contains `--reset-loops`, delete the loop state file and confirm reset.
+
+---
+
+## Section 3: Session History (last 30 days)
+
+Query `.claude/harness/analytics/events.jsonl` for `session.end` events within the last 30 days.
+
+Example jq queries:
+```bash
+# Total sessions in last 30 days
+CUTOFF=$(date -v-30d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -d '30 days ago' +%Y-%m-%dT%H:%M:%SZ)
+jq -s --arg cutoff "$CUTOFF" '[.[] | select(.event == "session.end" and .ts > $cutoff)]' .claude/harness/analytics/events.jsonl
+
+# Outcomes breakdown
+jq -s --arg cutoff "$CUTOFF" '[.[] | select(.event == "session.end" and .ts > $cutoff)] | group_by(.heuristic_outcome) | map({outcome: .[0].heuristic_outcome, count: length})' .claude/harness/analytics/events.jsonl
+
+# Agreement rate (sessions where outcome_agreement is true vs total)
+jq -s --arg cutoff "$CUTOFF" '[.[] | select(.event == "session.end" and .ts > $cutoff)] | {total: length, agreed: [.[] | select(.outcome_agreement == true)] | length}' .claude/harness/analytics/events.jsonl
+
+# Average duration
+jq -s --arg cutoff "$CUTOFF" '[.[] | select(.event == "session.end" and .ts > $cutoff) | .duration_seconds] | if length > 0 then (add / length / 60 | floor) else 0 end' .claude/harness/analytics/events.jsonl
+```
+
+Report:
+- Total sessions: N
+- Outcomes: N success, M partial, K failed
+- Agreement rate: X% (N/M agent & heuristic agree)
+- Average duration: Xm
+
+---
+
+## Section 4: Trends
+
+Compare this week vs last week for key metrics.
+
+Example jq queries:
+```bash
+# Loop rate this week vs last week
+THIS_WEEK=$(date -v-7d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)
+LAST_WEEK=$(date -v-14d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -d '14 days ago' +%Y-%m-%dT%H:%M:%SZ)
+
+jq -s --arg tw "$THIS_WEEK" --arg lw "$LAST_WEEK" '{
+  this_week: [.[] | select(.event == "loop.detected" and .ts > $tw)] | length,
+  last_week: [.[] | select(.event == "loop.detected" and .ts > $lw and .ts <= $tw)] | length
+}' .claude/harness/analytics/events.jsonl
+
+# Most violated constraint rule
+jq -s '[.[] | select(.event == "constraint.violation")] | group_by(.rule) | sort_by(-length) | .[0] | {rule: .[0].rule, count: length}' .claude/harness/analytics/events.jsonl
+
+# Highest disagreement by mode
+jq -s '[.[] | select(.event == "session.end" and .outcome_agreement == false)] | group_by(.mode) | map({mode: .[0].mode, count: length}) | sort_by(-(.count))' .claude/harness/analytics/events.jsonl
+```
+
+Report:
+- Loop rate: N this week vs M last week (trend arrow)
+- Most violated rule: rule_name (N times)
+- Highest disagreement by mode: mode_name (N sessions)
+
+---
+
+## Section 5: Recent Post-Mortems
+
+List post-mortem files from `.claude/harness/analytics/postmortems/` directory, most recent first.
+
+```bash
+ls -lt .claude/harness/analytics/postmortems/*.md 2>/dev/null | head -5
+```
+
+Report the last 5 post-mortems with their session ID and date.
+
+---
+
+## Additional Flags
+
+### `--analytics`
+
+If `$ARGUMENTS` contains `--analytics`, display all events for the current session from `.claude/harness/analytics/events.jsonl`:
+
+```bash
+jq -c --arg sid "SESSION_ID" 'select(.session_id == $sid)' .claude/harness/analytics/events.jsonl
+```
+
+### `--constraints`
+
+If `$ARGUMENTS` contains `--constraints`, display all loaded constraint rules from `.claude/harness/constraints.json`:
+
+```bash
+jq '.rules[] | {name, type, severity, description}' .claude/harness/constraints.json 2>/dev/null || echo "No constraints file found."
+```
+
+### `--trends`
+
+If `$ARGUMENTS` contains `--trends`, show extended breakdowns:
+
+```bash
+# Per-rule violation breakdown
+jq -s '[.[] | select(.event == "constraint.violation")] | group_by(.rule) | map({rule: .[0].rule, count: length, warn: [.[] | select(.decision == "allow")] | length, block: [.[] | select(.decision == "deny")] | length}) | sort_by(-(.count))' .claude/harness/analytics/events.jsonl
+
+# Per-mode session outcomes
+jq -s '[.[] | select(.event == "session.end")] | group_by(.mode) | map({mode: .[0].mode, total: length, success: [.[] | select(.heuristic_outcome == "success")] | length, partial: [.[] | select(.heuristic_outcome == "partial")] | length, failed: [.[] | select(.heuristic_outcome == "failed")] | length})' .claude/harness/analytics/events.jsonl
+
+# Per-branch loop frequency
+jq -s '[.[] | select(.event == "loop.detected")] | group_by(.branch) | map({branch: .[0].branch, count: length}) | sort_by(-(.count))' .claude/harness/analytics/events.jsonl
+```
+
+### `--postmortem [session_id]`
+
+If `$ARGUMENTS` contains `--postmortem`, display a post-mortem. If a session_id is provided, find the matching file in `.claude/harness/analytics/postmortems/`. If no session_id, display the most recent post-mortem:
+
+```bash
+ls -t .claude/harness/analytics/postmortems/*.md 2>/dev/null | head -1
+```
+
+### `--team`
+
+If `$ARGUMENTS` contains `--team`, show team activity view for the current branch. Get the current branch with `git branch --show-current`.
+
+```bash
+BRANCH=$(git branch --show-current)
+
+# Task completions with advisory signals (filtered by current branch)
+jq -s --arg branch "$BRANCH" '[.[] | select(.event == "team.task_completed" and .branch == $branch)] | {
+  total: length,
+  clean: [.[] | select(.advisory_signals.recent_blocked_violations == 0 and .advisory_signals.recent_loops_on_branch == 0)] | length,
+  with_signals: [.[] | select(.advisory_signals.recent_blocked_violations > 0 or .advisory_signals.recent_loops_on_branch > 0)] | length
+}' .claude/harness/analytics/events.jsonl
+
+# Idle events (filtered by current branch)
+jq -s --arg branch "$BRANCH" '[.[] | select(.event == "team.agent_idle" and .branch == $branch)] | length' .claude/harness/analytics/events.jsonl
+```
+
+---
 
 ## Format
 
 Present the output as a clean markdown summary matching this structure:
 
 ```
-## Harness Status
+## Harness Status Dashboard
 
-### Loop Detection
-State: Active/Inactive
-Recent tool calls tracked: N
-State file: /tmp/harness-loop-state-XXXX.jsonl
+### Current Session
+Session: SESSION_ID | Branch: BRANCH | Mode: MODE
+Duration: Xh Xm | Compactions: N | Team context: yes/no
 
-### Progress
-Last saved: TIMESTAMP
-Branch: BRANCH
-Active sessions: N
+### Guardrail Activity (this session)
+Loops detected: N (M resolved, K unresolved)
+Constraint violations: N warn, M block
 
-### Constraints
-Rules loaded: N
-Violations blocked: N
-Warnings issued: N
+### Session History (last 30 days)
+Total sessions: N
+Outcomes: N success, M partial, K failed
+Agreement rate: X% (N/M agent & heuristic agree)
+Avg duration: Xm
+
+### Trends
+Loop rate: N/session (arrow from M last week)
+Most violated rule: RULE (N times)
+Highest disagreement: MODE (N sessions)
+
+### Recent Post-Mortems
+- BRANCH--SESSION (DATE) — OUTCOME
+- BRANCH--SESSION (DATE) — OUTCOME
 ```

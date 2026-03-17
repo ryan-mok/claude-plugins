@@ -4,6 +4,425 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
 
+# --- compute_session_end: heuristic-based session.end emission ---
+# Called from the Stop event path after fallback/cleanup/index logic.
+# Reads progress file, events.jsonl, and loop state to derive outcome.
+compute_session_end() {
+    local progress_file="$1"
+    local events_file
+    events_file="$(get_analytics_dir "$CWD")/events.jsonl"
+    local loop_state_file="/tmp/harness-loop-state-${SESSION_PREFIX}.jsonl"
+
+    # --- 1. Start gh pr list in background (8s timeout) ---
+    local gh_pid=""
+    local gh_result_file
+    gh_result_file=$(mktemp)
+    # gh_result_file cleaned up explicitly at line ~150 (rm -f)
+    # No RETURN trap — it's process-global in bash and would fire in other functions
+    if command -v gh >/dev/null 2>&1; then
+        # Use background-and-kill instead of `timeout` (not available on stock macOS)
+        gh -C "$CWD" pr list --head "$BRANCH" --state open --limit 1 --json number > "$gh_result_file" 2>/dev/null &
+        gh_pid=$!
+        # Kill after 8 seconds if still running
+        ( sleep 8; kill "$gh_pid" 2>/dev/null && echo "TIMEOUT" > "$gh_result_file" ) &
+        local gh_watchdog_pid=$!
+    else
+        echo "NO_GH" > "$gh_result_file"
+    fi
+
+    # --- 2. Read progress file ---
+    local agent_outcome="unknown"
+    local mode="unknown"
+    local semantic_blocks=0
+    local progress_marked_complete="false"
+
+    if [ -f "$progress_file" ]; then
+        # agent_outcome: first word after ## Agent Outcome heading
+        local outcome_line
+        outcome_line=$(sed -n '/^## Agent Outcome/{n;p;}' "$progress_file" 2>/dev/null | head -1)
+        if [ -n "$outcome_line" ]; then
+            local first_word
+            first_word=$(echo "$outcome_line" | awk '{print tolower($1)}')
+            case "$first_word" in
+                success|partial|failed|abandoned) agent_outcome="$first_word" ;;
+            esac
+        fi
+
+        # mode: from YAML frontmatter
+        local yaml_mode
+        yaml_mode=$(sed -n '/^---$/,/^---$/{ s/^mode: *//p; }' "$progress_file" 2>/dev/null | head -1 | tr -d '[:space:]')
+        if [ -n "$yaml_mode" ]; then
+            mode="$yaml_mode"
+        fi
+
+        # semantic_blocks: count lines starting with "- [" in ## Semantic Constraint Notes
+        semantic_blocks=$(sed -n '/^## Semantic Constraint Notes/,/^## /{/^- \[/p;}' "$progress_file" 2>/dev/null | wc -l | tr -d ' ')
+
+        # progress_marked_complete: reuse TASK_COMPLETE which is already computed
+        if [ "$TASK_COMPLETE" = true ]; then
+            progress_marked_complete="true"
+        fi
+    fi
+
+    # --- 3. Read all counts from events.jsonl in one pass ---
+    local loop_count=0 total_violations=0 constraint_violations_blocked=0 compaction_count=0 start_ts="" team_event_count=0
+    if [[ -f "$events_file" ]]; then
+        # Compute 24h cutoff in bash for portability (avoids jq strftime Z-suffix issues)
+        local yesterday
+        yesterday=$(date -u -v-1d +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -d "24 hours ago" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "1970-01-01T00:00:00Z")
+
+        local counts
+        counts=$(jq -s --arg sid "$SESSION_PREFIX" --arg branch "$BRANCH" --arg yesterday "$yesterday" '
+          [.[] | select(.session_id==$sid)] as $session |
+          {
+            loop_count: [$session[] | select(.event=="loop.detected")] | length,
+            total_violations: [$session[] | select(.event=="constraint.violation")] | length,
+            constraint_violations_blocked: [$session[] | select(.event=="constraint.violation" and .decision=="deny")] | length,
+            compaction_count: [$session[] | select(.event=="session.compact")] | length,
+            start_ts: ([$session[] | select(.event=="session.start")] | sort_by(.ts) | first | .ts // null),
+            team_event_count: [.[] | select((.event | startswith("team.")) and .branch==$branch and .ts > $yesterday)] | length
+          }
+        ' "$events_file" 2>/dev/null)
+
+        if [[ -n "$counts" ]]; then
+            loop_count=$(echo "$counts" | jq -r '.loop_count')
+            total_violations=$(echo "$counts" | jq -r '.total_violations')
+            constraint_violations_blocked=$(echo "$counts" | jq -r '.constraint_violations_blocked')
+            compaction_count=$(echo "$counts" | jq -r '.compaction_count')
+            start_ts=$(echo "$counts" | jq -r '.start_ts // empty')
+            team_event_count=$(echo "$counts" | jq -r '.team_event_count')
+        fi
+    fi
+
+    # --- 4. Read loop state file ---
+    local tests_passing="null"
+    local unresolved_loops=0
+
+    if [ -f "$loop_state_file" ]; then
+        # tests_passing: find last Bash entry matching test runner, check error field
+        local last_test_entry
+        last_test_entry=$(jq -s '[.[] | select(.tool=="Bash" and (.file | test("test|jest|pytest|cargo.test|go.test|npm.test|vitest|mocha|rspec"; "i")))] | last' "$loop_state_file" 2>/dev/null)
+        if [ -n "$last_test_entry" ] && [ "$last_test_entry" != "null" ]; then
+            local test_error
+            test_error=$(echo "$last_test_entry" | jq -r '.error // ""')
+            if [ -n "$test_error" ]; then
+                tests_passing="false"
+            else
+                tests_passing="true"
+            fi
+        fi
+
+        # unresolved_loops: for each loop.detected event's (tool,file), check if still in last 10
+        if [ -f "$events_file" ] && [ "$loop_count" -gt 0 ]; then
+            local loop_patterns
+            loop_patterns=$(jq -r --arg sid "$SESSION_PREFIX" \
+                'select(.event=="loop.detected" and .session_id==$sid) | "\(.tool)|\(.file)"' \
+                "$events_file" 2>/dev/null | sort -u)
+            local last_10
+            last_10=$(tail -n 10 "$loop_state_file")
+            while IFS= read -r pattern; do
+                [ -z "$pattern" ] && continue
+                local loop_tool loop_file
+                loop_tool="${pattern%%|*}"
+                loop_file="${pattern#*|}"
+                local still_present
+                still_present=$(echo "$last_10" | jq -r --arg t "$loop_tool" --arg f "$loop_file" \
+                    'select(.tool==$t and .file==$f) | .tool' 2>/dev/null | wc -l | tr -d ' ')
+                if [ "$still_present" -gt 0 ]; then
+                    unresolved_loops=$((unresolved_loops + 1))
+                fi
+            done <<< "$loop_patterns"
+        fi
+    fi
+
+    # --- 5. Wait for gh result ---
+    local pr_created="false"
+    local pr_check_timeout="false"
+    if [ -n "$gh_pid" ]; then
+        wait "$gh_pid" 2>/dev/null || true
+        # Kill the watchdog if gh completed before timeout
+        kill "$gh_watchdog_pid" 2>/dev/null || true
+        wait "$gh_watchdog_pid" 2>/dev/null || true
+    fi
+    local gh_output
+    gh_output=$(cat "$gh_result_file" 2>/dev/null || echo "")
+    rm -f "$gh_result_file"
+    if [ "$gh_output" = "TIMEOUT" ]; then
+        pr_check_timeout="true"
+    elif [ "$gh_output" = "NO_GH" ]; then
+        pr_check_timeout="true"
+    elif echo "$gh_output" | jq -e '.[0].number' >/dev/null 2>&1; then
+        pr_created="true"
+    fi
+
+    # --- 6. Compute duration_seconds (using start_ts from consolidated read) ---
+    local duration_seconds="null"
+    if [ -n "$start_ts" ] && [ "$start_ts" != "null" ] && [ "$start_ts" != "" ]; then
+        local start_epoch now_epoch
+        # macOS date parsing
+        start_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$start_ts" +%s 2>/dev/null) || \
+            start_epoch=$(date -d "$start_ts" +%s 2>/dev/null) || \
+            start_epoch=""
+        if [ -n "$start_epoch" ]; then
+            now_epoch=$(date +%s)
+            duration_seconds=$((now_epoch - start_epoch))
+        fi
+    fi
+    # Fallback: file stat creation time
+    if [ "$duration_seconds" = "null" ] && [ -f "$progress_file" ]; then
+        local file_ctime now_epoch
+        file_ctime=$(stat -f %B "$progress_file" 2>/dev/null) || \
+            file_ctime=$(stat -c %W "$progress_file" 2>/dev/null) || \
+            file_ctime=""
+        if [ -n "$file_ctime" ] && [ "$file_ctime" != "0" ] && [ "$file_ctime" != "" ]; then
+            now_epoch=$(date +%s)
+            duration_seconds=$((now_epoch - file_ctime))
+        fi
+    fi
+
+    # --- 7. Derive heuristic_outcome ---
+    local heuristic_outcome="partial"
+    if [ "$tests_passing" = "false" ] || [ "$constraint_violations_blocked" -gt 0 ]; then
+        heuristic_outcome="failed"
+    elif { [ "$pr_created" = "true" ] || [ "$progress_marked_complete" = "true" ]; } && \
+         { [ "$tests_passing" = "true" ] || [ "$tests_passing" = "null" ]; } && \
+         [ "$unresolved_loops" -eq 0 ] && [ "$constraint_violations_blocked" -eq 0 ]; then
+        heuristic_outcome="success"
+    fi
+
+    # --- 8. Compute outcome_agreement ---
+    local outcome_agreement="false"
+    if [ "$agent_outcome" = "$heuristic_outcome" ]; then
+        outcome_agreement="true"
+    fi
+
+    # --- 9. Compute team_context (using team_event_count from consolidated read) ---
+    local team_context="false"
+    [[ "$team_event_count" -gt 0 ]] && team_context="true"
+
+    # --- 10. Emit session.end ---
+    local extra_fields
+    extra_fields=$(jq -n -c \
+        --arg agent_outcome "$agent_outcome" \
+        --arg heuristic_outcome "$heuristic_outcome" \
+        --argjson outcome_agreement "$outcome_agreement" \
+        --arg mode "$mode" \
+        --argjson pr_created "$pr_created" \
+        --argjson pr_check_timeout "$pr_check_timeout" \
+        --argjson progress_marked_complete "$progress_marked_complete" \
+        --argjson tests_passing "$tests_passing" \
+        --argjson unresolved_loops "$unresolved_loops" \
+        --argjson loop_count "$loop_count" \
+        --argjson total_violations "$total_violations" \
+        --argjson constraint_violations_blocked "$constraint_violations_blocked" \
+        --argjson compaction_count "$compaction_count" \
+        --argjson semantic_blocks "$semantic_blocks" \
+        --argjson duration_seconds "$duration_seconds" \
+        --argjson team_context "$team_context" \
+        '{
+            agent_outcome: $agent_outcome,
+            heuristic_outcome: $heuristic_outcome,
+            outcome_agreement: $outcome_agreement,
+            mode: $mode,
+            pr_created: $pr_created,
+            pr_check_timeout: $pr_check_timeout,
+            progress_marked_complete: $progress_marked_complete,
+            tests_passing: $tests_passing,
+            unresolved_loops: $unresolved_loops,
+            loop_count: $loop_count,
+            total_violations: $total_violations,
+            constraint_violations_blocked: $constraint_violations_blocked,
+            compaction_count: $compaction_count,
+            semantic_blocks: $semantic_blocks,
+            duration_seconds: $duration_seconds,
+            team_context: $team_context
+        }')
+
+    emit_event "session.end" "$extra_fields"
+
+    # Save for generate_postmortem to avoid re-reading events.jsonl
+    SESSION_END_JSON="$extra_fields"
+}
+
+# File-scoped variable for passing session.end data to generate_postmortem
+SESSION_END_JSON=""
+
+# --- generate_postmortem: create a markdown post-mortem for "interesting" sessions ---
+# Called right after compute_session_end in the Stop path.
+# Only generates when the session hit loops, violations, failures, disagreement, or heavy compaction.
+generate_postmortem() {
+    local events_file
+    events_file="$(get_analytics_dir "$CWD")/events.jsonl"
+
+    # Need events.jsonl to exist
+    [ -f "$events_file" ] || return 0
+
+    # Use session.end data passed from compute_session_end
+    local end_event="$SESSION_END_JSON"
+
+    [ -n "$end_event" ] || return 0
+
+    # --- Extract all fields in one jq call ---
+    local pm_ao pm_ho pm_mode pm_dur pm_oa pm_lc pm_tv pm_cvb pm_cc pm_sb
+    eval "$(echo "$end_event" | jq -r '
+      @sh "pm_ao=\(.agent_outcome) pm_ho=\(.heuristic_outcome) pm_mode=\(.mode // "unknown") pm_dur=\(.duration_seconds // "null") pm_oa=\(.outcome_agreement) pm_lc=\(.loop_count // 0) pm_tv=\(.total_violations // 0) pm_cvb=\(.constraint_violations_blocked // 0) pm_cc=\(.compaction_count // 0) pm_sb=\(.semantic_blocks // 0)"
+    ')"
+
+    local outcome_agreement="$pm_oa"
+    local heuristic_outcome="$pm_ho"
+    local loop_count="$pm_lc"
+    local constraint_violations_blocked="$pm_cvb"
+    local compaction_count="$pm_cc"
+    local agent_outcome="$pm_ao"
+    local mode="$pm_mode"
+    local duration_seconds="$pm_dur"
+    local total_violations="$pm_tv"
+    local semantic_blocks="$pm_sb"
+
+    # Also extract fields not in the batched call
+    local pr_created tests_passing unresolved_loops progress_marked_complete
+    pr_created=$(echo "$end_event" | jq -r '.pr_created')
+    tests_passing=$(echo "$end_event" | jq -r '.tests_passing')
+    unresolved_loops=$(echo "$end_event" | jq -r '.unresolved_loops')
+    progress_marked_complete=$(echo "$end_event" | jq -r '.progress_marked_complete')
+
+    # --- Check trigger criteria ---
+    local dominated=false
+    [ "$outcome_agreement" = "false" ] && dominated=true
+    [ "$loop_count" -gt 0 ] 2>/dev/null && dominated=true
+    [ "$constraint_violations_blocked" -gt 0 ] 2>/dev/null && dominated=true
+    if [ "$heuristic_outcome" = "failed" ] || [ "$heuristic_outcome" = "partial" ]; then
+        dominated=true
+    fi
+    [ "$compaction_count" -ge 3 ] 2>/dev/null && dominated=true
+
+    # Clean successful sessions get no post-mortem
+    if [ "$dominated" = "false" ]; then
+        return 0
+    fi
+
+    local end_date
+    end_date=$(date -u +"%Y-%m-%d")
+
+    # Format duration as human-readable
+    local duration_display="unknown"
+    if [ "$duration_seconds" != "null" ] && [ -n "$duration_seconds" ]; then
+        local mins secs
+        mins=$((duration_seconds / 60))
+        secs=$((duration_seconds % 60))
+        if [ "$mins" -gt 0 ]; then
+            duration_display="${mins}m ${secs}s"
+        else
+            duration_display="${secs}s"
+        fi
+    fi
+
+    # --- Create postmortem directory and file ---
+    local postmortem_dir
+    postmortem_dir="$(get_analytics_dir "$CWD")/postmortems"
+    mkdir -p "$postmortem_dir"
+
+    local postmortem_file="$postmortem_dir/${BRANCH_SAFE}--${SESSION_PREFIX}.md"
+
+    # --- Build the timeline from events.jsonl ---
+    local timeline
+    timeline=$(jq -s -r --arg sid "$SESSION_PREFIX" \
+        '[.[] | select(.session_id==$sid)] | sort_by(.ts) | .[] | "| \(.ts) | \(.event) | \(.scope // "-") |"' \
+        "$events_file" 2>/dev/null)
+
+    # --- Build loops table ---
+    local loops_table=""
+    if [ "$loop_count" -gt 0 ] 2>/dev/null; then
+        loops_table=$(jq -s -r --arg sid "$SESSION_PREFIX" \
+            '[.[] | select(.event=="loop.detected" and .session_id==$sid)] | sort_by(.ts) | .[] | "| \(.ts) | \(.tool // "-") | \(.file // "-") | \(.count // "-") |"' \
+            "$events_file" 2>/dev/null)
+    fi
+
+    # --- Build constraint violations table ---
+    local violations_table=""
+    if [ "$total_violations" -gt 0 ] 2>/dev/null; then
+        violations_table=$(jq -s -r --arg sid "$SESSION_PREFIX" \
+            '[.[] | select(.event=="constraint.violation" and .session_id==$sid)] | sort_by(.ts) | .[] | "| \(.ts) | \(.rule // "-") | \(.severity // "-") | \(.decision // "-") |"' \
+            "$events_file" 2>/dev/null)
+    fi
+
+    # --- Build signals list ---
+    local signals=""
+    [ "$outcome_agreement" = "false" ] && signals="${signals}- Outcome disagreement: agent=${agent_outcome}, heuristic=${heuristic_outcome}\n"
+    [ "$loop_count" -gt 0 ] 2>/dev/null && signals="${signals}- ${loop_count} loop(s) detected (${unresolved_loops} unresolved)\n"
+    [ "$constraint_violations_blocked" -gt 0 ] 2>/dev/null && signals="${signals}- ${constraint_violations_blocked} constraint violation(s) blocked\n"
+    [ "$compaction_count" -ge 3 ] 2>/dev/null && signals="${signals}- High compaction count: ${compaction_count}\n"
+    [ "$tests_passing" = "false" ] && signals="${signals}- Tests failing at session end\n"
+    [ "$pr_created" = "false" ] && [ "$progress_marked_complete" = "true" ] && signals="${signals}- Marked complete but no PR created\n"
+
+    # --- Write the markdown ---
+    {
+        echo "# Post-Mortem: ${SESSION_PREFIX}"
+        echo ""
+        echo "| Field | Value |"
+        echo "|-------|-------|"
+        echo "| Session | ${SESSION_PREFIX} |"
+        echo "| Branch | ${BRANCH} |"
+        echo "| Date | ${end_date} |"
+        echo "| Duration | ${duration_display} |"
+        echo "| Mode | ${mode} |"
+        echo "| Outcome (agent) | ${agent_outcome} |"
+        echo "| Outcome (heuristic) | ${heuristic_outcome} |"
+        echo "| Agreement | ${outcome_agreement} |"
+        echo ""
+        echo "## Timeline"
+        echo ""
+        echo "| Timestamp | Event | Scope |"
+        echo "|-----------|-------|-------|"
+        if [ -n "$timeline" ]; then
+            echo "$timeline"
+        else
+            echo "| (no events) | - | - |"
+        fi
+        echo ""
+
+        if [ -n "$loops_table" ]; then
+            echo "## Loops"
+            echo ""
+            echo "| Timestamp | Tool | File | Count |"
+            echo "|-----------|------|------|-------|"
+            echo "$loops_table"
+            echo ""
+        fi
+
+        if [ -n "$violations_table" ]; then
+            echo "## Constraint Violations"
+            echo ""
+            echo "| Timestamp | Rule | Severity | Decision |"
+            echo "|-----------|------|----------|----------|"
+            echo "$violations_table"
+            echo ""
+        fi
+
+        echo "## Outcome Analysis"
+        echo ""
+        echo "- **Agent outcome:** ${agent_outcome}"
+        echo "- **Heuristic outcome:** ${heuristic_outcome}"
+        if [ "$outcome_agreement" = "true" ]; then
+            echo "- **Agreement:** yes"
+        else
+            echo "- **Agreement:** no -- agent and heuristic disagree"
+        fi
+        echo "- **PR created:** ${pr_created}"
+        echo "- **Tests passing:** ${tests_passing}"
+        echo "- **Progress complete:** ${progress_marked_complete}"
+        echo ""
+
+        echo "## Signals"
+        echo ""
+        if [ -n "$signals" ]; then
+            printf '%b' "$signals"
+        else
+            echo "- (none)"
+        fi
+    } > "$postmortem_file"
+}
+
 INPUT=$(cat)
 
 SESSION_PREFIX=$(get_session_prefix "$INPUT")
@@ -158,6 +577,22 @@ done
         echo "(no active sessions)"
     fi
 } > "$PROGRESS_DIR/_index.md"
+
+# Emit session.compact event (PreCompact only)
+if [[ "$EVENT" == "PreCompact" && -d "$PROGRESS_DIR" ]]; then
+    EVENTS_FILE="$(get_analytics_dir "$CWD")/events.jsonl"
+    COMPACT_COUNT=1
+    if [[ -f "$EVENTS_FILE" ]]; then
+        COMPACT_COUNT=$(( $(jq -rc --arg sid "$SESSION_PREFIX" 'select(.event=="session.compact" and .session_id==$sid)' "$EVENTS_FILE" 2>/dev/null | wc -l | tr -d ' ') + 1 ))
+    fi
+    emit_event "session.compact" "{\"compaction_count\":$COMPACT_COUNT}"
+fi
+
+# Emit session.end event and generate post-mortem (Stop only)
+if [ "$EVENT" = "Stop" ]; then
+    compute_session_end "$PROGRESS_FILE"
+    generate_postmortem
+fi
 
 # Output based on event type
 if [ "$EVENT" = "Stop" ]; then

@@ -140,6 +140,53 @@ fi
 git worktree remove "$WORKTREE_DIR" 2>/dev/null || rm -rf "$WORKTREE_DIR"
 git branch -D "$WORKTREE_BRANCH" -q 2>/dev/null || true
 
+echo ""
+echo "Test 7: session.start event emitted when progress dir exists and content loaded (resumed=true)"
+rm -rf "$PROGRESS_DIR"
+mkdir -p "$PROGRESS_DIR"
+echo "# Resumed progress" > "$PROGRESS_DIR/${TEST_BRANCH}--test1234.md"
+# Clear any prior analytics
+rm -rf "$TEST_DIR/.claude/harness/analytics"
+output=$(jq --arg cwd "$TEST_DIR" '.cwd = $cwd' "$FIXTURES/session-start.json" | bash "$HOOK_SCRIPT" 2>&1 || true)
+EVENTS_FILE="$TEST_DIR/.claude/harness/analytics/events.jsonl"
+if [ -f "$EVENTS_FILE" ] && jq -e 'select(.event == "session.start" and .resumed == true)' "$EVENTS_FILE" > /dev/null 2>&1; then
+    echo "  PASS: session.start emitted with resumed=true"
+    ((PASS++)) || true
+else
+    echo "  FAIL: expected session.start event with resumed=true (events file: $(cat "$EVENTS_FILE" 2>/dev/null || echo 'missing'))"
+    ((FAIL++)) || true
+fi
+
+echo ""
+echo "Test 8: session.start event with resumed=false when progress dir exists but no matching file"
+rm -rf "$PROGRESS_DIR"
+mkdir -p "$PROGRESS_DIR"
+# Don't create any matching files — empty progress dir
+rm -rf "$TEST_DIR/.claude/harness/analytics"
+output=$(jq --arg cwd "$TEST_DIR" '.cwd = $cwd' "$FIXTURES/session-start.json" | bash "$HOOK_SCRIPT" 2>&1 || true)
+EVENTS_FILE="$TEST_DIR/.claude/harness/analytics/events.jsonl"
+if [ -f "$EVENTS_FILE" ] && jq -e 'select(.event == "session.start" and .resumed == false)' "$EVENTS_FILE" > /dev/null 2>&1; then
+    echo "  PASS: session.start emitted with resumed=false"
+    ((PASS++)) || true
+else
+    echo "  FAIL: expected session.start event with resumed=false (events file: $(cat "$EVENTS_FILE" 2>/dev/null || echo 'missing'))"
+    ((FAIL++)) || true
+fi
+
+echo ""
+echo "Test 9: No session.start event when progress directory does not exist"
+rm -rf "$PROGRESS_DIR"
+rm -rf "$TEST_DIR/.claude/harness/analytics"
+output=$(jq --arg cwd "$TEST_DIR" '.cwd = $cwd' "$FIXTURES/session-start.json" | bash "$HOOK_SCRIPT" 2>&1 || true)
+EVENTS_FILE="$TEST_DIR/.claude/harness/analytics/events.jsonl"
+if [ ! -f "$EVENTS_FILE" ]; then
+    echo "  PASS: no event emitted without progress dir"
+    ((PASS++)) || true
+else
+    echo "  FAIL: event file should not exist (got: $(cat "$EVENTS_FILE" 2>/dev/null))"
+    ((FAIL++)) || true
+fi
+
 # Cleanup
 rm -rf "$TEST_DIR"
 
