@@ -17,7 +17,8 @@ compute_session_end() {
     local gh_pid=""
     local gh_result_file
     gh_result_file=$(mktemp)
-    trap 'rm -f "$gh_result_file"' RETURN
+    # gh_result_file cleaned up explicitly at line ~150 (rm -f)
+    # No RETURN trap — it's process-global in bash and would fire in other functions
     if command -v gh >/dev/null 2>&1; then
         # Use background-and-kill instead of `timeout` (not available on stock macOS)
         gh -C "$CWD" pr list --head "$BRANCH" --state open --limit 1 --json number > "$gh_result_file" 2>/dev/null &
