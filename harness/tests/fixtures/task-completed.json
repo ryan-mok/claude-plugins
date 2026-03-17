@@ -1,0 +1,7 @@
+{
+  "session_id": "test1234-abcd-efgh-ijkl",
+  "cwd": "/tmp/test-project",
+  "hook_event_name": "TaskCompleted",
+  "task_id": "5",
+  "task_subject": "Implement auth middleware"
+}
