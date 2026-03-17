@@ -24,17 +24,17 @@ Archive analytics events older than 90 days:
 
 1. Read `.claude/harness/analytics/events.jsonl`
 2. Compute the cutoff date (90 days ago)
-3. Move events with `timestamp` older than the cutoff into `.claude/harness/analytics/events.archived.jsonl` (append if the archive file already exists)
+3. Move events with `ts` older than the cutoff into `.claude/harness/analytics/events.archived.jsonl` (append if the archive file already exists)
 4. Rewrite `events.jsonl` with only the recent events
 
 ```bash
 CUTOFF=$(date -v-90d +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -d '90 days ago' +%Y-%m-%dT%H:%M:%S)
 
 # Archive old events (append to archive file)
-jq -c --arg cutoff "$CUTOFF" 'select(.timestamp < $cutoff)' .claude/harness/analytics/events.jsonl >> .claude/harness/analytics/events.archived.jsonl
+jq -c --arg cutoff "$CUTOFF" 'select(.ts < $cutoff)' .claude/harness/analytics/events.jsonl >> .claude/harness/analytics/events.archived.jsonl
 
 # Keep recent events
-jq -c --arg cutoff "$CUTOFF" 'select(.timestamp >= $cutoff)' .claude/harness/analytics/events.jsonl > .claude/harness/analytics/events.jsonl.tmp && mv .claude/harness/analytics/events.jsonl.tmp .claude/harness/analytics/events.jsonl
+jq -c --arg cutoff "$CUTOFF" 'select(.ts >= $cutoff)' .claude/harness/analytics/events.jsonl > .claude/harness/analytics/events.jsonl.tmp && mv .claude/harness/analytics/events.jsonl.tmp .claude/harness/analytics/events.jsonl
 ```
 
 Remove post-mortem files older than 90 days from `.claude/harness/analytics/postmortems/`:

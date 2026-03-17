@@ -83,7 +83,7 @@ if [ -n "$ERROR_FP" ]; then
     if [ "$SAME_ERROR" -ge 3 ]; then
         SHORT_ERR=$(echo "$ERROR_FP" | head -c 60)
         BRANCH=$(git -C "$CWD" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
-        emit_event "loop.detected" "$(jq -n -c --arg p "error-echo" --arg t "$TOOL_NAME" --arg e "$SHORT_ERR" --argjson c "$SAME_ERROR" '{pattern:$p,tool:$t,error:$e,count:$c}')"
+        emit_event "loop.detected" "$(jq -n -c --arg p "error-echo" --arg t "$TOOL_NAME" --arg f "" --arg e "$SHORT_ERR" --argjson c "$SAME_ERROR" '{pattern:$p,tool:$t,file:$f,error:$e,count:$c}')"
         MSG="LOOP DETECTED: The same error has appeared $SAME_ERROR times: \"$SHORT_ERR...\". STOP. Do not retry the same approach. Use the harness:loop-recovery skill to find a fundamentally different approach."
         ESCAPED_MSG=$(escape_for_json "$MSG")
         cat <<EOF

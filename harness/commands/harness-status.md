@@ -178,18 +178,20 @@ ls -t .claude/harness/analytics/postmortems/*.md 2>/dev/null | head -1
 
 ### `--team`
 
-If `$ARGUMENTS` contains `--team`, show team activity view:
+If `$ARGUMENTS` contains `--team`, show team activity view for the current branch. Get the current branch with `git branch --show-current`.
 
 ```bash
-# Task completions with advisory signals
-jq -s '[.[] | select(.event == "team.task_completed")] | {
+BRANCH=$(git branch --show-current)
+
+# Task completions with advisory signals (filtered by current branch)
+jq -s --arg branch "$BRANCH" '[.[] | select(.event == "team.task_completed" and .branch == $branch)] | {
   total: length,
   clean: [.[] | select(.advisory_signals.recent_blocked_violations == 0 and .advisory_signals.recent_loops_on_branch == 0)] | length,
   with_signals: [.[] | select(.advisory_signals.recent_blocked_violations > 0 or .advisory_signals.recent_loops_on_branch > 0)] | length
 }' .claude/harness/analytics/events.jsonl
 
-# Idle events
-jq -s '[.[] | select(.event == "team.agent_idle")] | length' .claude/harness/analytics/events.jsonl
+# Idle events (filtered by current branch)
+jq -s --arg branch "$BRANCH" '[.[] | select(.event == "team.agent_idle" and .branch == $branch)] | length' .claude/harness/analytics/events.jsonl
 ```
 
 ---

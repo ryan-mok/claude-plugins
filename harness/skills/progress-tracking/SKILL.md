@@ -29,6 +29,7 @@ Follow this structure exactly — the harness hooks parse specific headings:
 
 ```
 ---
+status: in_progress
 team_context: false
 mode: harness
 ---

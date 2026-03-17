@@ -62,8 +62,12 @@ compute_session_end() {
     # --- 3. Read all counts from events.jsonl in one pass ---
     local loop_count=0 total_violations=0 constraint_violations_blocked=0 compaction_count=0 start_ts="" team_event_count=0
     if [[ -f "$events_file" ]]; then
+        # Compute 24h cutoff in bash for portability (avoids jq strftime Z-suffix issues)
+        local yesterday
+        yesterday=$(date -u -v-1d +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -d "24 hours ago" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "1970-01-01T00:00:00Z")
+
         local counts
-        counts=$(jq -s --arg sid "$SESSION_PREFIX" --arg branch "$BRANCH" '
+        counts=$(jq -s --arg sid "$SESSION_PREFIX" --arg branch "$BRANCH" --arg yesterday "$yesterday" '
           [.[] | select(.session_id==$sid)] as $session |
           {
             loop_count: [$session[] | select(.event=="loop.detected")] | length,
@@ -71,7 +75,7 @@ compute_session_end() {
             constraint_violations_blocked: [$session[] | select(.event=="constraint.violation" and .decision=="deny")] | length,
             compaction_count: [$session[] | select(.event=="session.compact")] | length,
             start_ts: ([$session[] | select(.event=="session.start")] | last | .ts // null),
-            team_event_count: [.[] | select((.event | startswith("team.")) and .branch==$branch and .ts > (now - 86400 | strftime("%Y-%m-%dT%H:%M:%SZ")))] | length
+            team_event_count: [.[] | select((.event | startswith("team.")) and .branch==$branch and .ts > $yesterday)] | length
           }
         ' "$events_file" 2>/dev/null)
 
@@ -279,7 +283,7 @@ generate_postmortem() {
     [ "$outcome_agreement" = "false" ] && dominated=true
     [ "$loop_count" -gt 0 ] 2>/dev/null && dominated=true
     [ "$constraint_violations_blocked" -gt 0 ] 2>/dev/null && dominated=true
-    if [ "$heuristic_outcome" = "failed" ]; then
+    if [ "$heuristic_outcome" = "failed" ] || [ "$heuristic_outcome" = "partial" ]; then
         dominated=true
     fi
     [ "$compaction_count" -ge 3 ] 2>/dev/null && dominated=true
