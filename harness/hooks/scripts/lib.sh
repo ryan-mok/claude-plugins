@@ -90,34 +90,39 @@ emit_event() {
     local event_type="$1"
     local extra_fields="${2:-"{}"}"
     local scope="${3:-single}"
-    local analytics_dir
-    analytics_dir=$(get_analytics_dir "$CWD")
+
+    # Cache git root — called once instead of 3 times
+    local git_root
+    git_root=$(get_git_root "$CWD")
+    local analytics_dir="$git_root/.claude/harness/analytics"
     mkdir -p "$analytics_dir"
 
-    local ts
+    local ts repo_root worktree_val
     ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    repo_root="$git_root"
 
-    local wt=false
-    if is_worktree "$CWD"; then
-        wt=true
+    # Inline worktree check using cached git_root
+    local toplevel
+    toplevel=$(cd "$CWD" && git rev-parse --show-toplevel 2>/dev/null || echo "")
+    if [[ -n "$toplevel" && "$toplevel" != "$git_root" ]]; then
+        worktree_val="true"
+    else
+        worktree_val="false"
     fi
 
-    local root
-    root=$(get_git_root "$CWD")
-
-    local envelope
-    envelope=$(jq -n \
+    # Single jq call for envelope + merge
+    local merged
+    merged=$(jq -n -c \
         --arg ts "$ts" \
         --arg event "$event_type" \
-        --arg session_id "$SESSION_PREFIX" \
-        --arg branch "$BRANCH" \
+        --arg sid "${SESSION_PREFIX:-unknown}" \
+        --arg branch "${BRANCH:-unknown}" \
         --arg scope "$scope" \
-        --argjson worktree "$wt" \
-        --arg repo_root "$root" \
-        '{ts: $ts, event: $event, session_id: $session_id, branch: $branch, scope: $scope, worktree: $worktree, repo_root: $repo_root}')
+        --arg repo "$repo_root" \
+        --argjson wt "$worktree_val" \
+        --argjson extra "$extra_fields" \
+        '{ts:$ts, event:$event, session_id:$sid, branch:$branch, scope:$scope, worktree:$wt, repo_root:$repo} + $extra'
+    )
 
-    local merged
-    merged=$(echo "$envelope" | jq --argjson extra "$extra_fields" '. + $extra')
-
-    echo "$merged" | jq -c '.' >> "$analytics_dir/events.jsonl"
+    echo "$merged" >> "$analytics_dir/events.jsonl"
 }

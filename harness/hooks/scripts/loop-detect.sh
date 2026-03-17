@@ -60,14 +60,12 @@ if [ -f "$STATE_FILE" ]; then
     fi
 fi
 
-# Resolve branch for analytics events
-BRANCH=$(git -C "$CWD" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
-
 # === Detection Pattern 1: Same tool + same file, 4+ times in last 10 ===
 if [ -n "$FILE_PATH" ] && [ "$FILE_PATH" != "" ]; then
     SAME_TARGET=$(tail -n 10 "$STATE_FILE" | jq -r --arg tool "$TOOL_NAME" --arg file "$FILE_PATH" \
         'select(.tool == $tool and .file == $file) | .tool' | wc -l | tr -d ' ')
     if [ "$SAME_TARGET" -ge 4 ]; then
+        BRANCH=$(git -C "$CWD" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
         emit_event "loop.detected" "$(jq -n -c --arg p "same-target" --arg t "$TOOL_NAME" --arg f "$FILE_PATH" --argjson c "$SAME_TARGET" '{pattern:$p,tool:$t,file:$f,count:$c}')"
         MSG="LOOP DETECTED: You have used $TOOL_NAME on $FILE_PATH $SAME_TARGET times in the last 10 tool calls. STOP. Do not retry the same approach. Use the harness:loop-recovery skill to find a fundamentally different approach."
         ESCAPED_MSG=$(escape_for_json "$MSG")
@@ -84,6 +82,7 @@ if [ -n "$ERROR_FP" ]; then
     SAME_ERROR=$(tail -n 10 "$STATE_FILE" | jq -r '.error' | grep -cF "$ERROR_FP" || true)
     if [ "$SAME_ERROR" -ge 3 ]; then
         SHORT_ERR=$(echo "$ERROR_FP" | head -c 60)
+        BRANCH=$(git -C "$CWD" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
         emit_event "loop.detected" "$(jq -n -c --arg p "error-echo" --arg t "$TOOL_NAME" --arg e "$SHORT_ERR" --argjson c "$SAME_ERROR" '{pattern:$p,tool:$t,error:$e,count:$c}')"
         MSG="LOOP DETECTED: The same error has appeared $SAME_ERROR times: \"$SHORT_ERR...\". STOP. Do not retry the same approach. Use the harness:loop-recovery skill to find a fundamentally different approach."
         ESCAPED_MSG=$(escape_for_json "$MSG")
@@ -111,6 +110,7 @@ if [ "$TOOL_NAME" = "Bash" ] && [ -n "$ERROR_FP" ]; then
             )
         ' 2>/dev/null || echo "0")
         if [ "$CYCLE_COUNT" -ge 3 ]; then
+            BRANCH=$(git -C "$CWD" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
             emit_event "loop.detected" "$(jq -n -c --arg p "edit-test-fail" --arg f "$FILE_PATH" --argjson c "$CYCLE_COUNT" '{pattern:$p,file:$f,count:$c}')"
             MSG="LOOP DETECTED: Edit-test-fail cycle detected $CYCLE_COUNT times. STOP. The same fix approach is not working. Use the harness:loop-recovery skill to try a fundamentally different approach."
             ESCAPED_MSG=$(escape_for_json "$MSG")

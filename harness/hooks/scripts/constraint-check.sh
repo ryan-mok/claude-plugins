@@ -35,7 +35,6 @@ REL_PATH="${FILE_PATH#$GIT_ROOT/}"
 # Process rules
 VIOLATIONS=""
 MAX_SEVERITY="none"  # none < warn < block
-BRANCH=$(git -C "$CWD" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
 
 RULE_COUNT=$(jq '.rules | length' "$CONSTRAINTS_FILE")
 
@@ -88,6 +87,7 @@ for i in $(seq 0 $((RULE_COUNT - 1))); do
         # Emit analytics event
         DECISION="allow"
         [[ "$SEVERITY" == "block" ]] && DECISION="deny"
+        BRANCH=$(git -C "$CWD" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
         emit_event "constraint.violation" "$(jq -n -c --arg r "$RULE_NAME" --arg f "$REL_PATH" --arg s "$SEVERITY" --arg d "$DECISION" '{rule:$r,file:$f,severity:$s,decision:$d}')"
 
         if [ "$SEVERITY" = "block" ]; then

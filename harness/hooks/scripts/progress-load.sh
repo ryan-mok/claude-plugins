@@ -68,7 +68,7 @@ fi
 
 # Emit session.start analytics event (progress dir exists at this point)
 if [[ -d "$PROGRESS_DIR" ]]; then
-    BRANCH="${BRANCH:-$(git -C "$CWD" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")}"
+    # BRANCH already set unconditionally above
     if [ -n "$CONTENT" ]; then
         RESUMED=true
     else
