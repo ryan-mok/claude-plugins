@@ -95,7 +95,7 @@ Every event shares these fields:
   "duration_seconds": 1847,
   "compaction_count": 2,
   "loop_count": 3,
-  "violation_count": 1,
+  "total_violations": 1,
   "semantic_blocks": 1,
   "team_context": false
 }
