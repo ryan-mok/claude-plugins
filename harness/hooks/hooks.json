@@ -1,5 +1,5 @@
 {
-  "description": "Harness engineering guardrails: loop detection, progress persistence, constraint enforcement",
+  "description": "Harness engineering guardrails: loop detection, progress persistence, constraint enforcement, team analytics",
   "hooks": {
     "PostToolUse": [
       {
@@ -20,7 +20,7 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/progress-save.sh\"",
-            "timeout": 10
+            "timeout": 15
           }
         ]
       }
@@ -57,6 +57,30 @@
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/constraint-check.sh\"",
             "timeout": 5
+          }
+        ]
+      }
+    ],
+    "TaskCompleted": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/team-task-verify.sh\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "TeammateIdle": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/team-idle-check.sh\"",
+            "timeout": 10
           }
         ]
       }
