@@ -101,9 +101,10 @@ emit_event() {
     ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
     repo_root="$git_root"
 
-    # Inline worktree check using cached git_root
+    # Inline worktree check using cached git_root (resolve symlinks for macOS /var -> /private/var)
     local toplevel
     toplevel=$(cd "$CWD" && git rev-parse --show-toplevel 2>/dev/null || echo "")
+    [[ -n "$toplevel" && -d "$toplevel" ]] && toplevel=$(cd "$toplevel" && pwd -P)
     if [[ -n "$toplevel" && "$toplevel" != "$git_root" ]]; then
         worktree_val="true"
     else

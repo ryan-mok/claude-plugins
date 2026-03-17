@@ -8,6 +8,7 @@ INPUT=$(cat)
 
 SESSION_PREFIX=$(get_session_prefix "$INPUT")
 CWD=$(get_field "$INPUT" ".cwd")
+CWD=$(cd "$CWD" 2>/dev/null && pwd -P || echo "$CWD")
 TOOL_NAME=$(get_field "$INPUT" ".tool_name")
 FILE_PATH=$(get_field "$INPUT" ".tool_input.file_path")
 

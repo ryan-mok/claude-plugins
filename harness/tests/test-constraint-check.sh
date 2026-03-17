@@ -8,6 +8,7 @@ FIXTURES="$SCRIPT_DIR/fixtures"
 PASS=0
 FAIL=0
 TEST_DIR=$(mktemp -d)
+TEST_DIR=$(cd "$TEST_DIR" && pwd -P)
 
 echo "=== Constraint Check Tests ==="
 

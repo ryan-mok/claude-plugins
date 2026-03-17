@@ -71,7 +71,7 @@ compute_session_end() {
             constraint_violations_blocked: [$session[] | select(.event=="constraint.violation" and .decision=="deny")] | length,
             compaction_count: [$session[] | select(.event=="session.compact")] | length,
             start_ts: ([$session[] | select(.event=="session.start")] | last | .ts // null),
-            team_event_count: [.[] | select((.event | startswith("team.")) and .branch==$branch)] | length
+            team_event_count: [.[] | select((.event | startswith("team.")) and .branch==$branch and .ts > (now - 86400 | strftime("%Y-%m-%dT%H:%M:%SZ")))] | length
           }
         ' "$events_file" 2>/dev/null)
 
