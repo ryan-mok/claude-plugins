@@ -115,6 +115,8 @@ Create the harness progress file at `.claude/harness/progress/{branch}--{session
 
 Ensure `.claude/harness/progress/` is in `.gitignore`.
 
+Ensure `.claude/harness/analytics/` is in the project's `.gitignore` (if not already present).
+
 ## Step 4: Check constraints
 
 If `.claude/harness/constraints.json` exists, note how many rules are loaded. If it does not exist, note that no constraints are configured and continue (do not suggest setup — this is autonomous mode).
