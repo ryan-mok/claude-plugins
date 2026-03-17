@@ -34,7 +34,8 @@ if [ ! -f "$CONSTRAINTS_FILE" ]; then
     exit 0
 fi
 
-# Make file path relative to git root for glob matching
+# Make file path relative to CWD for glob matching
+# (CWD is the project root / worktree root; FILE_PATH is always under CWD)
 REL_PATH="${FILE_PATH#$CWD/}"
 
 # Process rules
