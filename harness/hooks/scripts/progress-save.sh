@@ -265,7 +265,7 @@ generate_postmortem() {
     # --- Extract all fields in one jq call ---
     local pm_ao pm_ho pm_mode pm_dur pm_oa pm_lc pm_tv pm_cvb pm_cc pm_sb
     eval "$(echo "$end_event" | jq -r '
-      @sh "pm_ao=\(.agent_outcome) pm_ho=\(.heuristic_outcome) pm_mode=\(.mode // "unknown") pm_dur=\(.duration_seconds // 0) pm_oa=\(.outcome_agreement) pm_lc=\(.loop_count // 0) pm_tv=\(.total_violations // 0) pm_cvb=\(.constraint_violations_blocked // 0) pm_cc=\(.compaction_count // 0) pm_sb=\(.semantic_blocks // 0)"
+      @sh "pm_ao=\(.agent_outcome) pm_ho=\(.heuristic_outcome) pm_mode=\(.mode // "unknown") pm_dur=\(.duration_seconds // "null") pm_oa=\(.outcome_agreement) pm_lc=\(.loop_count // 0) pm_tv=\(.total_violations // 0) pm_cvb=\(.constraint_violations_blocked // 0) pm_cc=\(.compaction_count // 0) pm_sb=\(.semantic_blocks // 0)"
     ')"
 
     local outcome_agreement="$pm_oa"
