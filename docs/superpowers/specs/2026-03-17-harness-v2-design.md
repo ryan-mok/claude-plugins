@@ -82,7 +82,7 @@ Every event shares these fields:
   "event": "session.end",
   "mode": "harness-auto",
   "agent_outcome": "success",
-  "heuristic_outcome": "partial",
+  "heuristic_outcome": "failed",
   "outcome_agreement": false,
   "heuristic_signals": {
     "pr_created": true,
