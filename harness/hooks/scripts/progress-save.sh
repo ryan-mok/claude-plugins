@@ -19,8 +19,12 @@ compute_session_end() {
     gh_result_file=$(mktemp)
     trap 'rm -f "$gh_result_file"' RETURN
     if command -v gh >/dev/null 2>&1; then
-        ( timeout 8 gh pr list --head "$BRANCH" --state open --limit 1 --json number 2>/dev/null || echo "TIMEOUT" ) > "$gh_result_file" &
+        # Use background-and-kill instead of `timeout` (not available on stock macOS)
+        gh pr list --head "$BRANCH" --state open --limit 1 --json number > "$gh_result_file" 2>/dev/null &
         gh_pid=$!
+        # Kill after 8 seconds if still running
+        ( sleep 8; kill "$gh_pid" 2>/dev/null && echo "TIMEOUT" > "$gh_result_file" ) &
+        local gh_watchdog_pid=$!
     else
         echo "NO_GH" > "$gh_result_file"
     fi
@@ -135,6 +139,9 @@ compute_session_end() {
     local pr_check_timeout="false"
     if [ -n "$gh_pid" ]; then
         wait "$gh_pid" 2>/dev/null || true
+        # Kill the watchdog if gh completed before timeout
+        kill "$gh_watchdog_pid" 2>/dev/null || true
+        wait "$gh_watchdog_pid" 2>/dev/null || true
     fi
     local gh_output
     gh_output=$(cat "$gh_result_file" 2>/dev/null || echo "")

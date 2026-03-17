@@ -11,6 +11,10 @@ CWD=$(get_field "$INPUT" ".cwd")
 CWD=$(cd "$CWD" 2>/dev/null && pwd -P || echo "$CWD")
 TOOL_NAME=$(get_field "$INPUT" ".tool_name")
 FILE_PATH=$(get_field "$INPUT" ".tool_input.file_path")
+# Resolve symlinks in FILE_PATH to match CWD (macOS: /tmp -> /private/tmp)
+if [ -n "$FILE_PATH" ] && [ -d "$(dirname "$FILE_PATH")" ]; then
+    FILE_PATH="$(cd "$(dirname "$FILE_PATH")" 2>/dev/null && pwd -P)/$(basename "$FILE_PATH")"
+fi
 
 # Get file content based on tool type
 if [ "$TOOL_NAME" = "Write" ]; then
