@@ -42,6 +42,7 @@ cd "$TEST_DIR"
 git init -q
 git commit --allow-empty -m "initial" -q
 TEST_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+TEST_BRANCH_SAFE=$(echo "$TEST_BRANCH" | tr '/' '-')
 
 trap 'rm -rf "$TEST_DIR" /tmp/harness-loop-state-test1234.jsonl' EXIT
 
@@ -53,7 +54,7 @@ echo ""
 echo "Test 1: session.end emitted with correct agent_outcome from progress file"
 rm -rf "$PROGRESS_DIR" "$ANALYTICS_DIR"
 mkdir -p "$PROGRESS_DIR"
-cat > "$PROGRESS_DIR/${TEST_BRANCH}--test1234.md" << 'EOF'
+cat > "$PROGRESS_DIR/${TEST_BRANCH_SAFE}--test1234.md" << 'EOF'
 # Harness Progress
 
 ## Agent Outcome
@@ -82,7 +83,7 @@ echo ""
 echo "Test 2: heuristic_outcome=failed when loop state has failing test"
 rm -rf "$PROGRESS_DIR" "$ANALYTICS_DIR"
 mkdir -p "$PROGRESS_DIR"
-cat > "$PROGRESS_DIR/${TEST_BRANCH}--test1234.md" << 'EOF'
+cat > "$PROGRESS_DIR/${TEST_BRANCH_SAFE}--test1234.md" << 'EOF'
 # Harness Progress
 
 ## Current Status
@@ -105,7 +106,7 @@ echo ""
 echo "Test 3: agent_outcome defaults to unknown when section missing"
 rm -rf "$PROGRESS_DIR" "$ANALYTICS_DIR"
 mkdir -p "$PROGRESS_DIR"
-cat > "$PROGRESS_DIR/${TEST_BRANCH}--test1234.md" << 'EOF'
+cat > "$PROGRESS_DIR/${TEST_BRANCH_SAFE}--test1234.md" << 'EOF'
 # Harness Progress
 
 ## Current Status
@@ -125,7 +126,7 @@ echo ""
 echo "Test 4: heuristic_outcome=success when progress_marked_complete and no issues"
 rm -rf "$PROGRESS_DIR" "$ANALYTICS_DIR"
 mkdir -p "$PROGRESS_DIR"
-cat > "$PROGRESS_DIR/${TEST_BRANCH}--test1234.md" << 'EOF'
+cat > "$PROGRESS_DIR/${TEST_BRANCH_SAFE}--test1234.md" << 'EOF'
 # Harness Progress
 
 ## Current Status
@@ -146,7 +147,7 @@ echo ""
 echo "Test 5: tests_passing=null when no test runner in loop state"
 rm -rf "$PROGRESS_DIR" "$ANALYTICS_DIR"
 mkdir -p "$PROGRESS_DIR"
-cat > "$PROGRESS_DIR/${TEST_BRANCH}--test1234.md" << 'EOF'
+cat > "$PROGRESS_DIR/${TEST_BRANCH_SAFE}--test1234.md" << 'EOF'
 # Harness Progress
 
 ## Current Status
@@ -169,7 +170,7 @@ echo ""
 echo "Test 6: heuristic_outcome=failed when constraint violations blocked"
 rm -rf "$PROGRESS_DIR" "$ANALYTICS_DIR"
 mkdir -p "$PROGRESS_DIR" "$ANALYTICS_DIR"
-cat > "$PROGRESS_DIR/${TEST_BRANCH}--test1234.md" << 'EOF'
+cat > "$PROGRESS_DIR/${TEST_BRANCH_SAFE}--test1234.md" << 'EOF'
 # Harness Progress
 
 ## Current Status
@@ -188,7 +189,7 @@ echo ""
 echo "Test 7: mode read from YAML frontmatter"
 rm -rf "$PROGRESS_DIR" "$ANALYTICS_DIR"
 mkdir -p "$PROGRESS_DIR"
-cat > "$PROGRESS_DIR/${TEST_BRANCH}--test1234.md" << 'EOF'
+cat > "$PROGRESS_DIR/${TEST_BRANCH_SAFE}--test1234.md" << 'EOF'
 ---
 mode: harness
 status: in-progress
@@ -209,7 +210,7 @@ echo ""
 echo "Test 8: semantic_blocks counted from Semantic Constraint Notes"
 rm -rf "$PROGRESS_DIR" "$ANALYTICS_DIR"
 mkdir -p "$PROGRESS_DIR"
-cat > "$PROGRESS_DIR/${TEST_BRANCH}--test1234.md" << 'EOF'
+cat > "$PROGRESS_DIR/${TEST_BRANCH_SAFE}--test1234.md" << 'EOF'
 # Harness Progress
 
 ## Semantic Constraint Notes
@@ -231,7 +232,7 @@ echo ""
 echo "Test 9: outcome_agreement=true when agent and heuristic agree"
 rm -rf "$PROGRESS_DIR" "$ANALYTICS_DIR"
 mkdir -p "$PROGRESS_DIR"
-cat > "$PROGRESS_DIR/${TEST_BRANCH}--test1234.md" << 'EOF'
+cat > "$PROGRESS_DIR/${TEST_BRANCH_SAFE}--test1234.md" << 'EOF'
 # Harness Progress
 
 ## Agent Outcome
@@ -252,7 +253,7 @@ echo ""
 echo "Test 10: session.end has all required fields"
 rm -rf "$PROGRESS_DIR" "$ANALYTICS_DIR"
 mkdir -p "$PROGRESS_DIR"
-echo "# progress" > "$PROGRESS_DIR/${TEST_BRANCH}--test1234.md"
+echo "# progress" > "$PROGRESS_DIR/${TEST_BRANCH_SAFE}--test1234.md"
 rm -f /tmp/harness-loop-state-test1234.jsonl
 jq --arg cwd "$TEST_DIR" '.cwd = $cwd' "$FIXTURES/stop.json" | bash "$HOOK_SCRIPT" > /dev/null 2>&1 || true
 EVENTS_FILE="$ANALYTICS_DIR/events.jsonl"
