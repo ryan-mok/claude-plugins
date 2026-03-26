@@ -1,0 +1,54 @@
+{
+  "rules": [
+    {
+      "name": "no-hardcoded-secrets",
+      "type": "file-pattern",
+      "description": "Do not hardcode secrets, passwords, API keys, or tokens in source files. Use environment variables or a secrets manager.",
+      "deny": {
+        "in": "src/**",
+        "pattern": "(password|secret|api_key|apiKey|token|private_key|privateKey)\\s*[:=]\\s*['\"][^'\"]{8,}"
+      },
+      "severity": "block"
+    },
+    {
+      "name": "no-console-in-production",
+      "type": "file-pattern",
+      "description": "Do not use console.log/warn/error in production source files. Use a structured logging library instead.",
+      "deny": {
+        "in": "src/**",
+        "pattern": "console\\.(log|warn|error|debug|info)\\("
+      },
+      "severity": "warn"
+    },
+    {
+      "name": "no-eval",
+      "type": "file-pattern",
+      "description": "Do not use eval() — it enables code injection attacks. Use safer alternatives like JSON.parse() or Function constructors with validated input.",
+      "deny": {
+        "in": "src/**",
+        "pattern": "\\beval\\s*\\("
+      },
+      "severity": "block"
+    },
+    {
+      "name": "no-sql-string-concat",
+      "type": "file-pattern",
+      "description": "Do not build SQL queries with string concatenation or template literals. Use parameterized queries to prevent SQL injection.",
+      "deny": {
+        "in": "src/**",
+        "pattern": "(SELECT|INSERT|UPDATE|DELETE|DROP)\\s.*(\\$\\{|\\\" *\\+|' *\\+)"
+      },
+      "severity": "block"
+    },
+    {
+      "name": "no-any-type",
+      "type": "file-pattern",
+      "description": "Avoid using 'any' type in TypeScript. Use specific types, generics, or 'unknown' for type safety.",
+      "deny": {
+        "in": "src/**/*.ts",
+        "pattern": ":\\s*any\\b"
+      },
+      "severity": "warn"
+    }
+  ]
+}
