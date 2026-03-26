@@ -34,11 +34,12 @@ fi
 COMMAND=$(get_field "$INPUT" ".tool_input.command // \"\"")
 TOOL_RESULT=$(get_field "$INPUT" ".tool_result // \"\"")
 
-if ! echo "$COMMAND" | grep -qiE "(test|jest|pytest|cargo test|go test|npm test|vitest|mocha|rspec)"; then
+if ! echo "$COMMAND" | grep -qiE "(\btest\b|jest|pytest|cargo test|go test|npm test|vitest|mocha|rspec)"; then
     exit 0
 fi
 
-if echo "$TOOL_RESULT" | grep -qiE "(error|fail|exception|FAIL)"; then
+# Match real failures — exclude "0 failed" / "0 errors" from passing output
+if echo "$TOOL_RESULT" | grep -qiE "(exception|^FAIL(ED)?\b| [1-9][0-9]* (failed|failures?|errors?)\b)"; then
     exit 0
 fi
 

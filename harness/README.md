@@ -280,4 +280,4 @@ bash tests/test-team-hooks.sh        # Team mode analytics
 bash tests/test-lib.sh               # Shared utilities
 ```
 
-Tests are hermetic — they create temporary git repos, require no external dependencies beyond `bash` and `jq`, and clean up after themselves.
+Tests are hermetic — they create temporary git repos, require no external dependencies beyond `bash`, `jq`, and `git`, and clean up after themselves.

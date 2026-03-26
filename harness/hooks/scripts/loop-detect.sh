@@ -61,6 +61,8 @@ fi
 BUDGET_FILE="/tmp/harness-budget-${SESSION_PREFIX}"
 if [ -f "$BUDGET_FILE" ]; then
     BUDGET_COUNT=$(tr -d '[:space:]' < "$BUDGET_FILE")
+    # Default to 0 if file is empty or corrupted
+    [[ "$BUDGET_COUNT" =~ ^[0-9]+$ ]] || BUDGET_COUNT=0
 else
     BUDGET_COUNT=0
 fi
