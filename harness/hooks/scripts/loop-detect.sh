@@ -27,7 +27,6 @@ fi
 TOOL_NAME=$(get_field "$INPUT" ".tool_name")
 FILE_PATH=$(get_field "$INPUT" ".tool_input.file_path // .tool_input.command // \"\"")
 TOOL_RESULT=$(get_field "$INPUT" ".tool_result // \"\"")
-BRANCH=$(git -C "$CWD" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
 
 # State file — ephemeral, per-session
 STATE_FILE="/tmp/harness-loop-state-${SESSION_PREFIX}.jsonl"
@@ -56,6 +55,13 @@ if [ "$TOTAL" -gt 20 ]; then
     mv "${STATE_FILE}.tmp" "$STATE_FILE"
 fi
 
+# Lazy BRANCH resolution — only computed when emit_event is called
+resolve_branch() {
+    if [ -z "${BRANCH:-}" ]; then
+        BRANCH=$(git -C "$CWD" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+    fi
+}
+
 # === Budget Advisory ===
 # Persistent counter (separate from rolling state file which caps at 20)
 BUDGET_FILE="/tmp/harness-budget-${SESSION_PREFIX}"
@@ -73,13 +79,13 @@ echo "$BUDGET_COUNT" > "$BUDGET_FILE"
 BUDGET_MSG=""
 if [ "$BUDGET_COUNT" -eq 150 ]; then
     BUDGET_MSG="Budget critical: $BUDGET_COUNT tool calls in this session. Finish current work immediately and save progress."
-    emit_event "budget.advisory" "$(jq -n -c --argjson count "$BUDGET_COUNT" --arg level "critical" '{count:$count,level:$level}')"
+    resolve_branch; emit_event "budget.advisory" "$(jq -n -c --argjson count "$BUDGET_COUNT" --arg level "critical" '{count:$count,level:$level}')"
 elif [ "$BUDGET_COUNT" -eq 100 ]; then
     BUDGET_MSG="Budget warning: $BUDGET_COUNT tool calls in this session. Prioritize wrapping up current task."
-    emit_event "budget.advisory" "$(jq -n -c --argjson count "$BUDGET_COUNT" --arg level "warning" '{count:$count,level:$level}')"
+    resolve_branch; emit_event "budget.advisory" "$(jq -n -c --argjson count "$BUDGET_COUNT" --arg level "warning" '{count:$count,level:$level}')"
 elif [ "$BUDGET_COUNT" -eq 50 ]; then
     BUDGET_MSG="Budget advisory: $BUDGET_COUNT tool calls in this session. Stay focused on completing the current task."
-    emit_event "budget.advisory" "$(jq -n -c --argjson count "$BUDGET_COUNT" --arg level "advisory" '{count:$count,level:$level}')"
+    resolve_branch; emit_event "budget.advisory" "$(jq -n -c --argjson count "$BUDGET_COUNT" --arg level "advisory" '{count:$count,level:$level}')"
 fi
 
 if [ -n "$BUDGET_MSG" ]; then
@@ -90,31 +96,24 @@ EOF
     exit 0
 fi
 
-# === Graduated Loop Response Helper ===
-# emit_loop_message LEVEL PATTERN DESCRIPTION EVENT_PAYLOAD
-# Level 1: advisory only (no event, no "LOOP DETECTED" prefix)
-# Level 2-4: emit event + graduated message
+# Graduated loop response — level determines severity, exits the script.
+# Level 1: advisory only (no event). Level 2-4: emit event + graduated message.
 emit_loop_message() {
     local level="$1"
-    local pattern="$2"
-    local description="$3"
-    local event_payload="$4"
+    local description="$2"
+    local event_payload="$3"
 
     local msg=""
     if [ "$level" -eq 1 ]; then
-        # Level 1: nudge — advisory only, no event, no "LOOP DETECTED"
         msg="Harness notice: $description Consider trying a different approach before this becomes a loop."
     elif [ "$level" -eq 2 ]; then
-        # Level 2: warn — current behavior preserved
-        emit_event "loop.detected" "$(echo "$event_payload" | jq -c '. + {level: 2}')"
+        resolve_branch; emit_event "loop.detected" "$event_payload"
         msg="LOOP DETECTED: $description STOP. Do not retry the same approach. Use the harness:loop-recovery skill to find a fundamentally different approach."
     elif [ "$level" -eq 3 ]; then
-        # Level 3: redirect — stronger message
-        emit_event "loop.detected" "$(echo "$event_payload" | jq -c '. + {level: 3}')"
+        resolve_branch; emit_event "loop.detected" "$event_payload"
         msg="LOOP DETECTED (escalated): $description You MUST stop working on this file/approach immediately. Read different files for context. The current strategy has fundamentally failed."
     elif [ "$level" -ge 4 ]; then
-        # Level 4: circuit breaker — critical
-        emit_event "loop.detected" "$(echo "$event_payload" | jq -c '. + {level: 4}')"
+        resolve_branch; emit_event "loop.detected" "$event_payload"
         msg="LOOP DETECTED (circuit breaker): $description STOP ALL WORK on this file. Save progress immediately, document what was attempted and why it failed, and escalate to the user. Do not attempt any further fixes."
     fi
 
@@ -130,7 +129,6 @@ EOF
 # Each pattern computes a level (0 = no match, 1-4 = escalation level).
 # The pattern with the highest level fires. On ties, earlier patterns win.
 BEST_LEVEL=0
-BEST_PATTERN=""
 BEST_DESC=""
 BEST_PAYLOAD=""
 
@@ -138,48 +136,33 @@ BEST_PAYLOAD=""
 if [ -n "$FILE_PATH" ]; then
     SAME_TARGET=$(tail -n 10 "$STATE_FILE" | jq -r --arg tool "$TOOL_NAME" --arg file "$FILE_PATH" \
         'select(.tool == $tool and .file == $file) | .tool' | wc -l | tr -d ' ')
-    P1_PAYLOAD=$(jq -n -c --arg p "same-target" --arg t "$TOOL_NAME" --arg f "$FILE_PATH" --argjson c "$SAME_TARGET" '{pattern:$p,tool:$t,file:$f,count:$c}')
-    P1_DESC="You have used $TOOL_NAME on $FILE_PATH $SAME_TARGET times in the last 10 tool calls."
     P1_LEVEL=0
-    if [ "$SAME_TARGET" -ge 8 ]; then
-        P1_LEVEL=4
-    elif [ "$SAME_TARGET" -ge 6 ]; then
-        P1_LEVEL=3
-    elif [ "$SAME_TARGET" -ge 4 ]; then
-        P1_LEVEL=2
-    elif [ "$SAME_TARGET" -ge 3 ]; then
-        P1_LEVEL=1
+    if [ "$SAME_TARGET" -ge 8 ]; then P1_LEVEL=4
+    elif [ "$SAME_TARGET" -ge 6 ]; then P1_LEVEL=3
+    elif [ "$SAME_TARGET" -ge 4 ]; then P1_LEVEL=2
+    elif [ "$SAME_TARGET" -ge 3 ]; then P1_LEVEL=1
     fi
     if [ "$P1_LEVEL" -gt "$BEST_LEVEL" ]; then
         BEST_LEVEL=$P1_LEVEL
-        BEST_PATTERN="same-target"
-        BEST_DESC="$P1_DESC"
-        BEST_PAYLOAD="$P1_PAYLOAD"
+        BEST_DESC="You have used $TOOL_NAME on $FILE_PATH $SAME_TARGET times in the last 10 tool calls."
+        BEST_PAYLOAD=$(jq -n -c --arg p "same-target" --arg t "$TOOL_NAME" --arg f "$FILE_PATH" --argjson c "$SAME_TARGET" --argjson l "$P1_LEVEL" '{pattern:$p,tool:$t,file:$f,count:$c,level:$l}')
     fi
 fi
 
 # --- Pattern 2: Same error substring in last 10 ---
 if [ -n "$ERROR_FP" ]; then
-    # Count entries (not lines) whose error field contains the fingerprint
     SAME_ERROR=$(tail -n 10 "$STATE_FILE" | jq -r --arg fp "$ERROR_FP" 'select(.error | contains($fp)) | "match"' | wc -l | tr -d ' ')
-    SHORT_ERR=$(echo "$ERROR_FP" | head -c 60)
-    P2_PAYLOAD=$(jq -n -c --arg p "error-echo" --arg t "$TOOL_NAME" --arg f "$FILE_PATH" --arg e "$SHORT_ERR" --argjson c "$SAME_ERROR" '{pattern:$p,tool:$t,file:$f,error:$e,count:$c}')
-    P2_DESC="The same error has appeared $SAME_ERROR times: \"$SHORT_ERR...\"."
     P2_LEVEL=0
-    if [ "$SAME_ERROR" -ge 7 ]; then
-        P2_LEVEL=4
-    elif [ "$SAME_ERROR" -ge 5 ]; then
-        P2_LEVEL=3
-    elif [ "$SAME_ERROR" -ge 3 ]; then
-        P2_LEVEL=2
-    elif [ "$SAME_ERROR" -ge 2 ]; then
-        P2_LEVEL=1
+    if [ "$SAME_ERROR" -ge 7 ]; then P2_LEVEL=4
+    elif [ "$SAME_ERROR" -ge 5 ]; then P2_LEVEL=3
+    elif [ "$SAME_ERROR" -ge 3 ]; then P2_LEVEL=2
+    elif [ "$SAME_ERROR" -ge 2 ]; then P2_LEVEL=1
     fi
     if [ "$P2_LEVEL" -gt "$BEST_LEVEL" ]; then
         BEST_LEVEL=$P2_LEVEL
-        BEST_PATTERN="error-echo"
-        BEST_DESC="$P2_DESC"
-        BEST_PAYLOAD="$P2_PAYLOAD"
+        SHORT_ERR=$(echo "$ERROR_FP" | head -c 60)
+        BEST_DESC="The same error has appeared $SAME_ERROR times: \"$SHORT_ERR...\"."
+        BEST_PAYLOAD=$(jq -n -c --arg p "error-echo" --arg t "$TOOL_NAME" --arg f "$FILE_PATH" --arg e "$SHORT_ERR" --argjson c "$SAME_ERROR" --argjson l "$P2_LEVEL" '{pattern:$p,tool:$t,file:$f,error:$e,count:$c,level:$l}')
     fi
 fi
 
@@ -199,30 +182,23 @@ if [ "$TOOL_NAME" = "Bash" ] && [ -n "$ERROR_FP" ]; then
                 end
             )
         ' 2>/dev/null || echo "0")
-        P3_PAYLOAD=$(jq -n -c --arg p "edit-test-fail" --arg t "Edit" --arg f "$FILE_PATH" --argjson c "$CYCLE_COUNT" '{pattern:$p,tool:$t,file:$f,count:$c}')
-        P3_DESC="Edit-test-fail cycle detected $CYCLE_COUNT times. The same fix approach is not working."
         P3_LEVEL=0
-        if [ "$CYCLE_COUNT" -ge 5 ]; then
-            P3_LEVEL=4
-        elif [ "$CYCLE_COUNT" -ge 4 ]; then
-            P3_LEVEL=3
-        elif [ "$CYCLE_COUNT" -ge 3 ]; then
-            P3_LEVEL=2
-        elif [ "$CYCLE_COUNT" -ge 2 ]; then
-            P3_LEVEL=1
+        if [ "$CYCLE_COUNT" -ge 5 ]; then P3_LEVEL=4
+        elif [ "$CYCLE_COUNT" -ge 4 ]; then P3_LEVEL=3
+        elif [ "$CYCLE_COUNT" -ge 3 ]; then P3_LEVEL=2
+        elif [ "$CYCLE_COUNT" -ge 2 ]; then P3_LEVEL=1
         fi
         if [ "$P3_LEVEL" -gt "$BEST_LEVEL" ]; then
             BEST_LEVEL=$P3_LEVEL
-            BEST_PATTERN="edit-test-fail"
-            BEST_DESC="$P3_DESC"
-            BEST_PAYLOAD="$P3_PAYLOAD"
+            BEST_DESC="Edit-test-fail cycle detected $CYCLE_COUNT times. The same fix approach is not working."
+            BEST_PAYLOAD=$(jq -n -c --arg p "edit-test-fail" --arg t "Edit" --arg f "$FILE_PATH" --argjson c "$CYCLE_COUNT" --argjson l "$P3_LEVEL" '{pattern:$p,tool:$t,file:$f,count:$c,level:$l}')
         fi
     fi
 fi
 
 # Fire the highest-severity match, if any
 if [ "$BEST_LEVEL" -gt 0 ]; then
-    emit_loop_message "$BEST_LEVEL" "$BEST_PATTERN" "$BEST_DESC" "$BEST_PAYLOAD"
+    emit_loop_message "$BEST_LEVEL" "$BEST_DESC" "$BEST_PAYLOAD"
 fi
 
 # No loop detected — silent exit

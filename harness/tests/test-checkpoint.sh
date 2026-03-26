@@ -41,17 +41,6 @@ assert_file_exists() {
     fi
 }
 
-assert_file_not_exists() {
-    local name="$1" path="$2"
-    if [ ! -f "$path" ]; then
-        echo "  PASS: $name"
-        ((PASS++)) || true
-    else
-        echo "  FAIL: $name (file should not exist: $path)"
-        ((FAIL++)) || true
-    fi
-}
-
 # Helper: create a temp git repo with one commit and harness progress file
 setup_test_repo() {
     local tmpdir
@@ -137,13 +126,8 @@ passing_test_input "$TEST_DIR" | bash "$HOOK_SCRIPT" 2>&1 || true
 STASH_COUNT=$(git -C "$TEST_DIR" stash list 2>/dev/null | wc -l | tr -d ' ')
 assert_eq "no stash when no changes" "0" "$STASH_COUNT"
 ANALYTICS="$TEST_DIR/.claude/harness/analytics/events.jsonl"
-if [ -f "$ANALYTICS" ] && grep -q "checkpoint.created" "$ANALYTICS" 2>/dev/null; then
-    echo "  FAIL: no analytics event expected"
-    ((FAIL++)) || true
-else
-    echo "  PASS: no analytics event"
-    ((PASS++)) || true
-fi
+CHECKPOINT_EVENTS=$(grep -c "checkpoint.created" "$ANALYTICS" 2>/dev/null || echo "0")
+assert_eq "no analytics event" "0" "$CHECKPOINT_EVENTS"
 
 rm -rf "$TEST_DIR"
 trap - EXIT
