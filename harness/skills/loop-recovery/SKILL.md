@@ -7,6 +7,17 @@ description: This skill should be used when a "LOOP DETECTED" message appears in
 
 When loop detection fires, the current approach is not working. Continuing to retry wastes tokens and produces broken output. Follow this structured recovery process.
 
+## Escalation Levels
+
+The harness uses a 4-level graduated response system. The level determines how urgently you must change course:
+
+- **Level 1 (nudge):** A "Harness notice" advisory. You are approaching a loop. Proactively try a different approach before the pattern escalates.
+- **Level 2 (warn):** A "LOOP DETECTED" warning. The current approach has clearly failed. Follow the recovery process below to find a fundamentally different strategy.
+- **Level 3 (redirect):** A "LOOP DETECTED (escalated)" warning. You MUST stop working on the current file/approach immediately. Read different files for context. The current strategy has fundamentally failed — do not continue with variations of it. Change your approach entirely.
+- **Level 4 (circuit breaker):** A "LOOP DETECTED (circuit breaker)" critical alert. STOP ALL WORK on this file. Save your progress immediately, document what was attempted and why it failed, and escalate to the user. Do not attempt any further fixes.
+
+At Level 3 or above, you must read new files and change strategy entirely before making any further edits. At Level 4, your only action should be to save progress and ask the user for help.
+
 ## Recovery Process
 
 ### Step 1: Diagnose the loop
@@ -30,7 +41,7 @@ Identify at least 2 fundamentally different approaches. "Fundamentally different
 Choose one of these paths:
 
 1. **Try a different approach** — pick the most promising alternative from step 2 and implement it
-2. **Revert and simplify** — use `/rewind` to go back to the last working state, then try a simpler solution
+2. **Revert and simplify** — check `git stash list` for harness checkpoints (entries starting with `harness-checkpoint:`) that represent the last known good state. Use `git stash apply stash@{N}` to restore. If no checkpoints exist, use git diff/reset to go back to the last commit.
 3. **Read more context** — the fix may require understanding code that hasn't been read yet. Read related files, type definitions, or documentation before attempting another fix.
 4. **Escalate to the human** — if 2+ fundamentally different approaches have already been tried and failed, ask the user for guidance. Explain what was tried and why it failed.
 

@@ -163,6 +163,19 @@ Semantic and cross-file rules require an agent hook to evaluate writes. The agen
 
 This ensures the agent hook is only active when there are rules that need it, avoiding unnecessary overhead for projects that only use pattern-based rules.
 
+## Security Constraint Recipes
+
+The harness plugin ships with example security constraints at `examples/constraints.security.json`. These can be copied into your project's `.claude/harness/constraints.json` and customized.
+
+Available recipes:
+- **no-hardcoded-secrets** (block) — Detects hardcoded passwords, API keys, and tokens in source files
+- **no-console-in-production** (warn) — Flags console.log/warn/error in production code
+- **no-eval** (block) — Prevents use of eval() which enables code injection
+- **no-sql-string-concat** (block) — Detects SQL queries built with string concatenation
+- **no-any-type** (warn) — Flags TypeScript `any` type usage
+
+To use: copy the rules you need into your project's `.claude/harness/constraints.json` file and adjust the `in` glob patterns to match your project structure.
+
 ## Performance Considerations
 
 Semantic and cross-file rules add ~3-5s to every file write. Use narrow globs to limit which files trigger evaluation. For example, prefer `src/controllers/**` over `src/**` if the rule only applies to controllers.
