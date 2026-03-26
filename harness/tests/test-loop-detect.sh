@@ -74,6 +74,28 @@ assert_circuit_breaker() {
     fi
 }
 
+assert_output_contains() {
+    local name="$1" output="$2" pattern="$3"
+    if echo "$output" | grep -q "$pattern"; then
+        echo "  PASS: $name"
+        ((PASS++)) || true
+    else
+        echo "  FAIL: $name (expected output to contain '$pattern')"
+        ((FAIL++)) || true
+    fi
+}
+
+assert_output_not_contains() {
+    local name="$1" output="$2" pattern="$3"
+    if echo "$output" | grep -q "$pattern"; then
+        echo "  FAIL: $name (unexpected '$pattern' in output)"
+        ((FAIL++)) || true
+    else
+        echo "  PASS: $name"
+        ((PASS++)) || true
+    fi
+}
+
 # Clean state before tests
 STATE_PREFIX="/tmp/harness-loop-state-test1234"
 rm -f "${STATE_PREFIX}.jsonl"
@@ -219,55 +241,30 @@ done
 assert_escalated "edit-test-fail level 3" "$output"
 
 echo ""
-echo "Test: Budget advisory at 50 tool calls"
+echo "Test 13: Budget advisory at 50 tool calls"
 rm -f "${STATE_PREFIX}.jsonl" "/tmp/harness-budget-test1234"
-# Pre-set budget counter to 49
 echo "49" > "/tmp/harness-budget-test1234"
 output=$(jq --arg fp "/tmp/test-project/src/unique-budget-test.ts" '.tool_input.file_path = $fp' "$FIXTURES/post-tool-use-edit.json" | bash "$HOOK_SCRIPT" 2>&1 || true)
-if echo "$output" | grep -q "Budget advisory"; then
-    echo "  PASS: budget advisory at 50"
-    ((PASS++)) || true
-else
-    echo "  FAIL: expected budget advisory at 50"
-    ((FAIL++)) || true
-fi
+assert_output_contains "budget advisory at 50" "$output" "Budget advisory"
 
 echo ""
-echo "Test: No budget message at 51"
+echo "Test 14: No budget message at 51"
 output=$(jq --arg fp "/tmp/test-project/src/unique-budget-test2.ts" '.tool_input.file_path = $fp' "$FIXTURES/post-tool-use-edit.json" | bash "$HOOK_SCRIPT" 2>&1 || true)
-if echo "$output" | grep -q "Budget"; then
-    echo "  FAIL: unexpected budget message at 51"
-    ((FAIL++)) || true
-else
-    echo "  PASS: no budget message at 51"
-    ((PASS++)) || true
-fi
+assert_output_not_contains "no budget message at 51" "$output" "Budget"
 
 echo ""
-echo "Test: Budget warning at 100"
+echo "Test 15: Budget warning at 100"
 echo "99" > "/tmp/harness-budget-test1234"
 rm -f "${STATE_PREFIX}.jsonl"
 output=$(jq --arg fp "/tmp/test-project/src/unique-budget-test3.ts" '.tool_input.file_path = $fp' "$FIXTURES/post-tool-use-edit.json" | bash "$HOOK_SCRIPT" 2>&1 || true)
-if echo "$output" | grep -q "Budget warning"; then
-    echo "  PASS: budget warning at 100"
-    ((PASS++)) || true
-else
-    echo "  FAIL: expected budget warning at 100"
-    ((FAIL++)) || true
-fi
+assert_output_contains "budget warning at 100" "$output" "Budget warning"
 
 echo ""
-echo "Test: Budget critical at 150"
+echo "Test 16: Budget critical at 150"
 echo "149" > "/tmp/harness-budget-test1234"
 rm -f "${STATE_PREFIX}.jsonl"
 output=$(jq --arg fp "/tmp/test-project/src/unique-budget-test4.ts" '.tool_input.file_path = $fp' "$FIXTURES/post-tool-use-edit.json" | bash "$HOOK_SCRIPT" 2>&1 || true)
-if echo "$output" | grep -q "Budget critical"; then
-    echo "  PASS: budget critical at 150"
-    ((PASS++)) || true
-else
-    echo "  FAIL: expected budget critical at 150"
-    ((FAIL++)) || true
-fi
+assert_output_contains "budget critical at 150" "$output" "Budget critical"
 
 # Cleanup
 rm -f "${STATE_PREFIX}.jsonl"

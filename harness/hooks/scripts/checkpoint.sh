@@ -45,7 +45,7 @@ fi
 # Rate limiting: max one checkpoint per 5 minutes
 RATE_FILE="/tmp/harness-checkpoint-ts-${SESSION_PREFIX}"
 if [ -f "$RATE_FILE" ]; then
-    LAST_TS=$(cat "$RATE_FILE")
+    LAST_TS=$(tr -d '[:space:]' < "$RATE_FILE")
     NOW=$(date +%s)
     ELAPSED=$((NOW - LAST_TS))
     if [ "$ELAPSED" -lt 300 ]; then
@@ -68,6 +68,6 @@ git -C "$CWD" stash store -m "harness-checkpoint: ${TIMESTAMP} — tests passing
 date +%s > "$RATE_FILE"
 
 BRANCH=$(git -C "$CWD" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
-emit_event "checkpoint.created" '{"trigger":"tests_passing","stash_ref":"stash@{0}"}'
+emit_event "checkpoint.created" "$(jq -n -c --arg hash "$STASH_HASH" '{trigger:"tests_passing",stash_hash:$hash}')"
 
 exit 0
