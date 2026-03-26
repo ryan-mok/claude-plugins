@@ -4,7 +4,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
 
-# Read all stdin
 INPUT=$(cat)
 
 # Only run if harness is active in this session (agent-written progress file exists)
@@ -28,6 +27,7 @@ fi
 TOOL_NAME=$(get_field "$INPUT" ".tool_name")
 FILE_PATH=$(get_field "$INPUT" ".tool_input.file_path // .tool_input.command // \"\"")
 TOOL_RESULT=$(get_field "$INPUT" ".tool_result // \"\"")
+BRANCH=$(git -C "$CWD" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
 
 # State file — ephemeral, per-session
 STATE_FILE="/tmp/harness-loop-state-${SESSION_PREFIX}.jsonl"
@@ -47,33 +47,27 @@ ENTRY=$(jq -cn \
     --arg ts "$TIMESTAMP" \
     '{tool: $tool, file: $file, error: $error, ts: $ts}')
 
-# Append to state file
 echo "$ENTRY" >> "$STATE_FILE"
 
 # Keep only last 20 entries (rolling window)
-if [ -f "$STATE_FILE" ]; then
-    TOTAL=$(wc -l < "$STATE_FILE" | tr -d ' ')
-    if [ "$TOTAL" -gt 20 ]; then
-        TAIL_LINES=$((TOTAL - 20))
-        tail -n 20 "$STATE_FILE" > "${STATE_FILE}.tmp"
-        mv "${STATE_FILE}.tmp" "$STATE_FILE"
-    fi
+TOTAL=$(wc -l < "$STATE_FILE" | tr -d ' ')
+if [ "$TOTAL" -gt 20 ]; then
+    tail -n 20 "$STATE_FILE" > "${STATE_FILE}.tmp"
+    mv "${STATE_FILE}.tmp" "$STATE_FILE"
 fi
 
-# === Budget Advisory: track total tool calls and warn at thresholds ===
-TOTAL_CALLS=$(wc -l < "$STATE_FILE" | tr -d ' ')
-# We need a persistent count since the state file is capped at 20 entries.
-# Use a separate counter file.
+# === Budget Advisory ===
+# Persistent counter (separate from rolling state file which caps at 20)
 BUDGET_FILE="/tmp/harness-budget-${SESSION_PREFIX}"
 if [ -f "$BUDGET_FILE" ]; then
-    BUDGET_COUNT=$(cat "$BUDGET_FILE" | tr -d '[:space:]')
+    BUDGET_COUNT=$(tr -d '[:space:]' < "$BUDGET_FILE")
 else
     BUDGET_COUNT=0
 fi
 BUDGET_COUNT=$((BUDGET_COUNT + 1))
 echo "$BUDGET_COUNT" > "$BUDGET_FILE"
 
-# Check thresholds (only fire once per threshold)
+# Budget advisories fire exactly once per threshold (== not >=)
 BUDGET_MSG=""
 if [ "$BUDGET_COUNT" -eq 150 ]; then
     BUDGET_MSG="Budget critical: $BUDGET_COUNT tool calls in this session. Finish current work immediately and save progress."
@@ -103,8 +97,6 @@ emit_loop_message() {
     local pattern="$2"
     local description="$3"
     local event_payload="$4"
-
-    BRANCH=$(git -C "$CWD" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
 
     local msg=""
     if [ "$level" -eq 1 ]; then
@@ -141,7 +133,7 @@ BEST_DESC=""
 BEST_PAYLOAD=""
 
 # --- Pattern 1: Same tool + same file in last 10 ---
-if [ -n "$FILE_PATH" ] && [ "$FILE_PATH" != "" ]; then
+if [ -n "$FILE_PATH" ]; then
     SAME_TARGET=$(tail -n 10 "$STATE_FILE" | jq -r --arg tool "$TOOL_NAME" --arg file "$FILE_PATH" \
         'select(.tool == $tool and .file == $file) | .tool' | wc -l | tr -d ' ')
     P1_PAYLOAD=$(jq -n -c --arg p "same-target" --arg t "$TOOL_NAME" --arg f "$FILE_PATH" --argjson c "$SAME_TARGET" '{pattern:$p,tool:$t,file:$f,count:$c}')

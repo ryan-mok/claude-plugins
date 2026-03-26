@@ -4,7 +4,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
 
-# Read all stdin
 INPUT=$(cat)
 
 # Only run if harness is active in this session (agent-written progress file exists)
@@ -35,12 +34,10 @@ fi
 COMMAND=$(get_field "$INPUT" ".tool_input.command // \"\"")
 TOOL_RESULT=$(get_field "$INPUT" ".tool_result // \"\"")
 
-# Check if command matches test runner patterns
-if ! echo "$COMMAND" | grep -qiE "(test|jest|pytest|cargo.test|go.test|npm.test|vitest|mocha|rspec)"; then
+if ! echo "$COMMAND" | grep -qiE "(test|jest|pytest|cargo test|go test|npm test|vitest|mocha|rspec)"; then
     exit 0
 fi
 
-# Check that test result does NOT contain error indicators (i.e., tests passed)
 if echo "$TOOL_RESULT" | grep -qiE "(error|fail|exception|FAIL)"; then
     exit 0
 fi
@@ -56,19 +53,10 @@ if [ -f "$RATE_FILE" ]; then
     fi
 fi
 
-# Check if there are any staged or unstaged changes
-HAS_CHANGES=false
-if ! git -C "$CWD" diff --quiet 2>/dev/null; then
-    HAS_CHANGES=true
-fi
-if ! git -C "$CWD" diff --cached --quiet 2>/dev/null; then
-    HAS_CHANGES=true
-fi
-if [ "$HAS_CHANGES" = false ]; then
+if [ -z "$(git -C "$CWD" status --porcelain 2>/dev/null)" ]; then
     exit 0
 fi
 
-# Create checkpoint using git stash create + store (non-destructive)
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 STASH_HASH=$(git -C "$CWD" stash create 2>/dev/null || echo "")
 if [ -z "$STASH_HASH" ]; then
@@ -77,10 +65,8 @@ fi
 
 git -C "$CWD" stash store -m "harness-checkpoint: ${TIMESTAMP} — tests passing" "$STASH_HASH" 2>/dev/null || exit 0
 
-# Update rate-limit timestamp
 date +%s > "$RATE_FILE"
 
-# Emit analytics event
 BRANCH=$(git -C "$CWD" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
 emit_event "checkpoint.created" '{"trigger":"tests_passing","stash_ref":"stash@{0}"}'
 
