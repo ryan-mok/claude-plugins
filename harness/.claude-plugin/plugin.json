@@ -1,6 +1,6 @@
 {
   "name": "harness",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "description": "Harness engineering for Claude Code — graduated loop detection, git checkpointing, budget tracking, cross-session progress, architectural constraints, and orchestrated development workflows.",
   "author": {
     "name": "Ryan Mok"
